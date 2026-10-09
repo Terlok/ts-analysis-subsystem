@@ -1,0 +1,48 @@
+# Infrastructure for local development: QuestDB (archive), PostgreSQL (registry/events/alarms),
+# Redis (hot window, message bus, tile cache). The backend itself runs from backend/ (see README).
+#
+#   docker compose up -d
+#
+# PostgreSQL is published on 5433 to avoid clashing with a locally installed server on 5432.
+
+services:
+  questdb:
+    image: questdb/questdb:8.2.3
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # HTTP: web console, /exec, /exp, ILP over HTTP
+      - "8812:8812"   # PostgreSQL wire protocol
+      - "9009:9009"   # ILP over TCP (not used by the backend)
+    environment:
+      QDB_PG_USER: admin
+      QDB_PG_PASSWORD: quest
+      QDB_CAIRO_WAL_ENABLED_DEFAULT: "true"
+    volumes:
+      - questdb-data:/var/lib/questdb
+
+  postgres:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: tsa
+      POSTGRES_PASSWORD: tsa
+      POSTGRES_DB: tsa
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # Only keys with a TTL (cached tiles) may be evicted; the hot window and streams never are.
+    command: ["redis-server", "--maxmemory", "1gb", "--maxmemory-policy", "volatile-lru", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+volumes:
+  questdb-data:
+  postgres-data:
+  redis-data:

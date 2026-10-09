@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# backend runtime artifacts
+backend/models/*
+!backend/models/.gitkeep
+backend/data/
+*.labels.csv
