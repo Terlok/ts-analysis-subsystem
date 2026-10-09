@@ -124,8 +124,8 @@ docker compose start
 sudo mkdir -p /etc/systemd/system/docker.service.d
 sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null <<'EOF'
 [Service]
-Environment="HTTP_PROXY=http://LOGIN:PASSWORD@proxy.sunpp.local:3128"
-Environment="HTTPS_PROXY=http://LOGIN:PASSWORD@proxy.sunpp.local:3128"
+Environment="HTTP_PROXY=http://LOGIN:PASSWORD@..."
+Environment="HTTPS_PROXY=http://LOGIN:PASSWORD@..."
 Environment="NO_PROXY=localhost,127.0.0.1,::1"
 EOF
 sudo systemctl daemon-reload && sudo systemctl restart docker
