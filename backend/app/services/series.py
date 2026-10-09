@@ -74,11 +74,17 @@ class SeriesService:
         n =int(rows["cnt"].sum()) if len(rows) else 0
         if n <= m:
             return await self._raw(ch, t_from, t_to, m, wm)
+        stats = {
+            "vmin": float(rows["vmin"].min()),
+            "vmax": float(rows["vmax"].max()),
+            "mean": float(rows["vsum"].sum() / n),
+        }
         t, x = minmax_points(rows, t_from, t_to)
         if len(t) > m:
             idx = lttb_indices(t, x, m)
             t, x = t[idx], x[idx]
-        return Series(channel=ch, source="agg", level=lvl, n=n, m=m, eta=reduction_ratio(n, len(t)), t=t.tolist(), v=_clean(x))
+        return Series(channel=ch, source="agg", level=lvl, n=n, m=m, eta=reduction_ratio(n, len(t)),
+                      t=t.tolist(), v=_clean(x), **stats)
 
     async def _raw(self, ch: str, t_from: int, t_to: int, m: int, wm: int | None) -> Series:
         s = self.settings
@@ -94,6 +100,12 @@ class SeriesService:
         n = len(ts)
         if n == 0:
             return Series(channel=ch, source="empty", n=0, m=m, eta=0.0, t=[], v=[], q=[])
+        finite = val[~np.isnan(val)]
+        stats = (
+            {"vmin": float(finite.min()), "vmax": float(finite.max()), "mean": float(finite.mean())}
+            if len(finite)
+            else {}
+        )
         if n > m:
             ok = ~np.isnan(val)
             base = np.flatnonzero(ok)
@@ -108,4 +120,5 @@ class SeriesService:
             t=ts.tolist(),
             v=_clean(val),
             q=[str(x) for x in q],
+            **stats,
         )

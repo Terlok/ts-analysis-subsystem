@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.api.deps import get_state
 from app.db.models import Channel
 from app.db.redis_store import CONFIG_VERSION_KEY, LAST_KEY
-from app.schemas import ChannelCreate, ChannelIn, ChannelOut, ChannelState
+from app.schemas import ChannelCreate, ChannelIn, ChannelOut, ChannelState, ChannelStats
 from app.state import AppState
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
@@ -29,6 +29,13 @@ async def channels_state(st: AppState = Depends(get_state)):
         d = orjson.loads(v)
         out.append(ChannelState(id=k.decode(), last_ts=d.get("ts"), last_val=d.get("val"), last_quality=d.get("q")))
     return sorted(out, key=lambda c: c.id)
+
+
+@router.get("/stats", response_model=list[ChannelStats])
+async def channels_stats(st: AppState = Depends(get_state)):
+    """Time range and number of archived points of every channel (overview navigator, archive mode)."""
+    rows = await st.qdb.channel_stats()
+    return [ChannelStats(id=c, count=n, first_ts=a, last_ts=b) for c, n, a, b in sorted(rows)]
 
 
 @router.get("/{channel_id}", response_model=ChannelOut)

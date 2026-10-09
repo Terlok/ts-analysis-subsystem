@@ -79,6 +79,13 @@ class ChannelCreate(ChannelIn):
     id: str = Field(min_length=1, max_length=128)
 
 
+class ChannelStats(BaseModel):
+    id: str
+    count: int
+    first_ts: int
+    last_ts: int
+
+
 class ChannelState(BaseModel):
     id: str
     last_ts: int | None = None
@@ -99,6 +106,12 @@ class Series(BaseModel):
     t: list[int]
     v: list[float | None]
     q: list[str] | None = None  # quality codes (raw / hot sources only)
+    # Exact statistics of the interval, computed from raw points or aggregates (not from
+    # the downsampled curve). For the aggregate source, edge buckets may extend slightly
+    # beyond the interval.
+    vmin: float | None = None
+    vmax: float | None = None
+    mean: float | None = None
 
 
 class EventOut(BaseModel):

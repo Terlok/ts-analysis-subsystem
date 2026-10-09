@@ -224,3 +224,8 @@ backend/models/*
 !backend/models/.gitkeep
 backend/data/
 *.labels.csv
+
+# frontend
+node_modules/
+# Python template ignores lib/; frontend sources live in frontend/src/lib
+!frontend/src/lib/

@@ -100,6 +100,7 @@ async def test_series_hot_path_downsamples(settings, redis):
     assert s.source == "hot" and s.n == n and len(s.t) == s.m == 200
     assert s.t[0] == ts[0] and s.t[-1] == ts[-1]
     assert max(s.v) == pytest.approx(x.max()) and min(s.v) == pytest.approx(x.min())
+    assert s.mean == pytest.approx(x.mean()) and s.vmax == pytest.approx(x.max())
 
 
 async def test_series_aggregate_path_and_tile_cache(settings, redis):
@@ -119,6 +120,7 @@ async def test_series_aggregate_path_and_tile_cache(settings, redis):
     assert s.source == "agg" and s.level is not None
     assert s.n == n and len(s.t) <= s.m == 1600
     assert 9.0 in s.v
+    assert s.vmax == 9.0 and s.mean == pytest.approx(x.mean())  # exact, from aggregates
     q1 = qdb.agg_queries
     stats = await redis.hgetall("metrics:tiles")
     assert int(stats[b"miss"]) > 0
