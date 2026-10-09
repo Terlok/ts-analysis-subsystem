@@ -40,6 +40,8 @@ export interface EngineSnapshot {
   liveLatencyMs: number | null;
   fetchMs: number | null;
   serverMs: number | null;
+  /** events / point flags in the interval vs. shown (only the most significant if truncated) */
+  layerCounts: { events: number; eventsShown: number; flags: number; flagsShown: number };
 }
 
 interface Arr {
@@ -164,6 +166,7 @@ export class DataEngine {
       liveLatencyMs: null,
       fetchMs: null,
       serverMs: null,
+      layerCounts: { events: 0, eventsShown: 0, flags: 0, flagsShown: 0 },
     };
   }
 
@@ -431,7 +434,10 @@ export class DataEngine {
     this.emit({ overviewVersion: this.snap.overviewVersion + 1 });
   }
 
-  private applyHistory(reqId: number, p: { series: SeriesData[]; events: EventItem[]; flags: FlagPoint[]; alarms: Alarm[]; timingMs: Record<string, number> }) {
+  private applyHistory(
+    reqId: number,
+    p: { series: SeriesData[]; events: EventItem[]; flags: FlagPoint[]; alarms: Alarm[]; eventsTotal: number; flagsTotal: number; timingMs: Record<string, number> },
+  ) {
     const started = this.reqStarted.get(reqId);
     this.reqStarted.delete(reqId);
     this.histReq = 0;
@@ -462,6 +468,7 @@ export class DataEngine {
       last,
       fetchMs: started ? performance.now() - started : null,
       serverMs: p.timingMs.total ?? null,
+      layerCounts: { events: p.eventsTotal, eventsShown: p.events.length, flags: p.flagsTotal, flagsShown: p.flags.length },
     });
     this.bumpOverlay();
     this.bumpData();

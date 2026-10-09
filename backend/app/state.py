@@ -15,6 +15,7 @@ from app.services.live import LiveHub
 from app.services.registry import ChannelRegistry
 from app.services.series import SeriesService
 from app.services.tiles import TileCache
+from app.services.training import ModelTrainer
 
 
 @dataclass
@@ -29,6 +30,7 @@ class AppState:
     tiles: TileCache
     series: SeriesService
     live: LiveHub
+    trainer: ModelTrainer
 
     @classmethod
     def create(cls, settings: Settings) -> "AppState":
@@ -49,6 +51,7 @@ class AppState:
             tiles=tiles,
             series=SeriesService(settings, redis, qdb, tiles),
             live=LiveHub(settings, redis),
+            trainer=ModelTrainer(),
         )
 
     async def start(self) -> None:
@@ -56,6 +59,7 @@ class AppState:
         await self.live.start()
 
     async def close(self) -> None:
+        self.trainer.shutdown()
         await self.live.stop()
         await self.qdb.close()
         await self.pg_engine.dispose()

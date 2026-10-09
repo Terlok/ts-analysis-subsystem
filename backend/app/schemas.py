@@ -151,6 +151,9 @@ class SeriesResponse(BaseModel):
     events: list[EventOut] = []
     flags: list[FlagPoint] = []
     alarms: list["AlarmOut"] = []
+    # totals in the interval; if larger than the returned lists, only the most significant are shown
+    events_total: int = 0
+    flags_total: int = 0
     timing_ms: dict[str, float] = {}
 
 
@@ -245,6 +248,28 @@ class ModelVersionOut(BaseModel):
     params: dict | None
     metrics: dict | None
     active: bool
+
+
+class TrainRequest(BaseModel):
+    channel: str
+    t_from: int | None = None  # us; default: whole archive
+    t_to: int | None = None
+    trees: int = Field(100, ge=10, le=1000)
+    depth: int = Field(6, ge=2, le=16)
+    # auto: activate only if the model beats the naive forecast on the test part
+    activate: Literal["auto", "always", "never"] = "auto"
+
+
+class TrainingJobOut(BaseModel):
+    id: str
+    channel: str
+    t_from: int | None
+    t_to: int | None
+    status: Literal["queued", "running", "done", "error"]
+    created_at: float
+    finished_at: float | None
+    result: dict | None
+    error: str | None
 
 
 # --- analysis preview -------------------------------------------------------------

@@ -1,23 +1,32 @@
-"""Telemetry replayer: imitates a robot gateway by sending measurements from a file
+"""Telemetry replayer: imitates a robot gateway by sending measurements from files
 (exported from the `analog` table) to the ingestion endpoint of the backend.
 
     python -m scripts.replay data/analog.csv                         # real time, WebSocket
+    python -m scripts.replay data/*.csv --history 14d                # 14 days to the archive at once,
+                                                                      # the rest arrives in real time
     python -m scripts.replay data/analog.csv --speed 10              # 10x faster
     python -m scripts.replay data/analog.csv --speed 0 --time-mode original   # bulk load of history
     python -m scripts.replay data/analog.csv --channels A1,A2 --loop
-    python -m scripts.replay data/analog.csv --dry-run               # only statistics
+    python -m scripts.replay data/*.csv --history 14d --dry-run      # only statistics
 
 How it works
-  * the file is read in chunks and cut into packets of `--batch-ms` of *data* time
-    (or `--max-points`), each packet carries all channels in columnar form;
-    the batch size bounds the buffering delay L_batch <= (B_s - 1) / f_i;
-  * packet k is sent at wall time  start + (t_end_k - t_first) / speed;
+  * several files are merged into one time-ordered stream (k-way merge by timestamp);
+  * the stream is cut into packets of `--batch-ms` of *data* time (or `--max-points`),
+    each packet carries all channels in columnar form; the batch size bounds the
+    buffering delay L_batch <= (B_s - 1) / f_i;
+  * the anchor (data time mapped to "now") is the first sample, or with --history /
+    --live-from the split point; packet k is sent at wall time
+        start + (t_end_k - t_anchor) / speed,
+    so everything before the anchor (the history) is due in the past and is sent at
+    once in large packets (`--history-batch-ms`), and the rest follows in real time;
   * time modes:
-      rebase   (default) timestamps are shifted so the first sample is "now":
-               the stream looks live and the hot window / live charts work;
+      rebase   (default) timestamps are shifted so that the anchor is "now": the history
+               ends now and the live part continues with the wall clock;
       original timestamps are sent as they are in the file (history import);
     with --compress-time and speed > 1 rebased timestamps are also compressed,
     i.e. data time follows the wall clock;
+  * every accepted packet is archived by the backend (QuestDB) and analysed, whether it
+    is history or live;
   * delivery: WebSocket with acknowledgements; unacknowledged packets are re-sent
     after a reconnect (the server deduplicates by (channel, ts)). HTTP POST is
     available with --http.
@@ -39,7 +48,7 @@ from datetime import datetime, timezone
 import numpy as np
 import orjson
 
-from scripts.telemetry_file import Chunk, Columns, filter_chunk, read_chunks
+from scripts.telemetry_file import Chunk, Columns, filter_chunk, first_timestamp, merged_chunks, read_chunks
 
 log = logging.getLogger("replay")
 
@@ -57,6 +66,15 @@ def parse_time(s: str | None) -> int | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp() * 1_000_000)
+
+
+def parse_duration_us(s: str) -> int:
+    """'14d', '36h', '90m', '45s', '2w' -> microseconds."""
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    s = s.strip().lower()
+    if not s or s[-1] not in units:
+        raise ValueError(f"duration must end with one of {''.join(units)}: {s!r}")
+    return int(float(s[:-1]) * units[s[-1]] * 1_000_000)
 
 
 # --- packetizing ----------------------------------------------------------------------
@@ -154,10 +172,13 @@ class Stats:
         self.errors: collections.Counter[str] = collections.Counter()
         self.lag_s = 0.0
         self.new_channels: set[str] = set()
+        self.phase = "live"
+        self.history_points = 0
 
     def line(self, unacked: int) -> str:
         dt = max(time.monotonic() - self.t0, 1e-9)
         return (
+            f"[{'історія' if self.phase == 'history' else 'наживо'}] "
             f"packets={self.packets} points={self.points} rate={self.points / dt:,.0f} pts/s "
             f"acked={self.acked} unacked={unacked} rejected={self.rejected} resent={self.resent} "
             f"lag={self.lag_s:.2f}s channels+={len(self.new_channels)}"
@@ -345,19 +366,37 @@ async def replay(args: argparse.Namespace) -> int:
             log.info(stats.line(len(transport.unacked)))
 
     rep = asyncio.create_task(reporter())
-    clock = {"t_first": None, "offset": 0, "wall0": time.monotonic()}
+    files = list(args.files)
 
-    async def emit(packets: list[Packet], shift_us: int) -> None:
+    # anchor: data time mapped to "now" and from which pacing starts
+    anchor: int | None = parse_time(args.live_from)
+    if anchor is None and args.history:
+        firsts = [t for t in (first_timestamp(f, cols, args.format) for f in files) if t is not None]
+        if not firsts:
+            log.error("files are empty")
+            return 2
+        t0 = max(min(firsts), t_from) if t_from else min(firsts)
+        anchor = t0 + parse_duration_us(args.history)
+    clock = {"t_first": anchor, "offset": 0, "wall0": time.monotonic()}
+    if anchor is not None:
+        clock["offset"] = (now_us() - anchor) if args.time_mode == "rebase" else 0
+        stats.phase = "history"
+        log.info(
+            "split at %s (file time): earlier data goes to the archive at once, later data in real time",
+            datetime.fromtimestamp(anchor / 1e6, timezone.utc).isoformat(),
+        )
+
+    async def emit(packets: list[Packet], shift_us: int, history: bool = False) -> None:
         """Send packets on schedule. shift_us: data-time shift of the current loop iteration."""
         for p in packets:
             if stop.is_set():
                 return
-            if clock["t_first"] is None:  # first packet ever: anchor the time mapping
+            if clock["t_first"] is None:  # no explicit anchor: the first packet is "now"
                 clock["t_first"] = p.t_start
                 clock["offset"] = (now_us() - p.t_start) if args.time_mode == "rebase" else 0
                 clock["wall0"] = time.monotonic()
             t_first = clock["t_first"]
-            if speed > 0:
+            if speed > 0 and not history:
                 due = clock["wall0"] + (p.t_end + shift_us - t_first) / 1e6 / speed
                 delay = due - time.monotonic()
                 if delay > 0:
@@ -367,18 +406,31 @@ async def replay(args: argparse.Namespace) -> int:
             await transport.send(p.seq, encode(p, offset, compress, t_first, args.source))
             stats.packets += 1
             stats.points += p.n
+            if history:
+                stats.history_points += p.n
+
+    def source():
+        if len(files) == 1:
+            return read_chunks(files[0], cols, args.chunk_rows, args.format)
+        return merged_chunks(files, cols, args.chunk_rows, args.format)
 
     iteration = 0
-    t_lo = t_hi = None  # data time range of the file (after filters)
+    t_lo = t_hi = None  # data time range of the files (after filters)
+    t_started = time.monotonic()
     try:
         while not stop.is_set():
             pk = Packetizer(args.batch_ms * 1000, args.max_points)
             pk.seq = iteration * 10_000_000  # sequence numbers stay unique across loops
+            # the history split only applies to the first pass
+            split = anchor if iteration == 0 and anchor is not None else None
+            pk_hist = Packetizer(args.history_batch_ms * 1000, args.max_points) if split is not None else None
+            if pk_hist:
+                pk_hist.seq = pk.seq + 5_000_000
             shift = 0
             if iteration > 0:
                 shift = iteration * (t_hi - t_lo + args.batch_ms * 1000)
             rows = 0
-            for chunk in read_chunks(args.file, cols, args.chunk_rows, args.format):
+            for chunk in source():
                 chunk = filter_chunk(chunk, channels, t_from, t_to)
                 if args.limit and rows + len(chunk) > args.limit:
                     chunk = chunk.take(slice(0, max(args.limit - rows, 0)))
@@ -386,17 +438,36 @@ async def replay(args: argparse.Namespace) -> int:
                     lo, hi = int(chunk.ts.min()), int(chunk.ts.max())
                     t_lo = lo if t_lo is None else min(t_lo, lo)
                     t_hi = hi if t_hi is None else max(t_hi, hi)
+                if pk_hist is not None:
+                    k = int(np.searchsorted(chunk.ts, split, side="left"))
+                    if k:
+                        await emit(pk_hist.feed(chunk.take(slice(0, k))), shift, history=True)
+                    if k < len(chunk):  # the live part starts here
+                        await emit(pk_hist.flush(), shift, history=True)
+                        log.info(
+                            "history sent: %d points in %.0f s; continuing in real time",
+                            stats.history_points, time.monotonic() - t_started,
+                        )
+                        stats.phase = "live"
+                        pk_hist = None
+                        chunk = chunk.take(slice(k, None))
+                    else:
+                        chunk = chunk.take(slice(0, 0))
                 await emit(pk.feed(chunk), shift)
-                rows += len(chunk)
+                rows += len(chunk) if pk_hist is None else 0
                 if stop.is_set() or (args.limit and rows >= args.limit):
                     break
+            if pk_hist is not None:  # the files ended before the split point
+                await emit(pk_hist.flush(), shift, history=True)
+                stats.phase = "live"
+                log.warning("all data is before the split point: everything went to the archive")
             await emit(pk.flush(), shift)
             if pk.out_of_order:
                 log.warning("%d rows were older than already sent ones (file not sorted by ts?)", pk.out_of_order)
-            if rows == 0:
-                log.warning("no rows matched (check file, --channels, --start/--end)")
+            if rows == 0 and stats.points == 0:
+                log.warning("no rows matched (check files, --channels, --start/--end)")
             iteration += 1
-            if not args.loop or rows == 0:
+            if not args.loop or stats.points == 0:
                 break
         await transport.drain(args.drain_timeout)
     finally:
@@ -413,13 +484,17 @@ async def replay(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("file", help="CSV / CSV.gz / Parquet file exported from the analog table")
+    p.add_argument("files", nargs="+", metavar="file", help="CSV / CSV.gz / Parquet files exported from the analog table")
     p.add_argument("--url", default="ws://localhost:8000/ws/ingest", help="WebSocket ingest endpoint")
     p.add_argument("--http", metavar="URL", help="use HTTP POST instead, e.g. http://localhost:8000/api/ingest")
     p.add_argument("--speed", type=float, default=1.0, help="replay speed factor; 0 = as fast as possible")
     p.add_argument("--time-mode", choices=["rebase", "original"], default="rebase")
     p.add_argument("--compress-time", action="store_true", help="with rebase and speed>1: compress data time too")
+    p.add_argument("--history", metavar="DURATION",
+                   help="send the first DURATION of data (e.g. 14d) to the archive at once, the rest in real time")
+    p.add_argument("--live-from", metavar="TIME", help="explicit split point in file time (ISO 8601 or us)")
     p.add_argument("--batch-ms", type=int, default=100, help="data time covered by one packet")
+    p.add_argument("--history-batch-ms", type=int, default=600_000, help="data time per packet for the history part")
     p.add_argument("--max-points", type=int, default=5000, help="max measurements per packet")
     p.add_argument("--max-inflight", type=int, default=64, help="max unacknowledged packets (WebSocket)")
     p.add_argument("--channels", help="comma separated channel ids to send (default: all)")

@@ -30,8 +30,9 @@ export function TopBar() {
   else if (snap.loading) status = { cls: "badge warn", text: "Завантаження…" };
   else status = { cls: "badge ok", text: `Дані завантажено (${n} ${n === 1 ? "датасет" : "датасетів"})` };
 
-  const wsBadge =
-    snap.mode === "archive"
+  const wsBadge = !n
+    ? { cls: "badge", text: "WS: —" }
+    : snap.mode === "archive"
       ? { cls: "badge", text: "WS: пауза" }
       : snap.wsStatus === "online"
         ? { cls: "badge ok", text: "WS: онлайн" }

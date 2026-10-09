@@ -19,6 +19,7 @@ import type {
   ModeChange,
   ModelVersion,
   RawPoint,
+  TrainingJob,
 } from "./types";
 
 export class ApiError extends Error {
@@ -111,6 +112,9 @@ export const api = {
   // models and offline analysis
   models: (channel?: string) => get<ModelVersion[]>("/api/models", { channel }),
   activateModel: (id: number) => request<ModelVersion>("POST", `/api/models/${id}/activate`),
+  trainModel: (r: { channel: string; t_from?: Micros | null; t_to?: Micros | null; trees?: number; depth?: number; activate?: "auto" | "always" | "never" }) =>
+    request<TrainingJob>("POST", "/api/models/train", undefined, r),
+  trainingJobs: () => get<TrainingJob[]>("/api/models/jobs"),
   analysisPreview: (req: AnalysisPreviewRequest) =>
     request<AnalysisPreviewResponse>("POST", "/api/analysis/preview", undefined, req),
 };

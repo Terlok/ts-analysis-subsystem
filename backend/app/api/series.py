@@ -13,12 +13,13 @@ from app.api.deps import get_state, parse_range, split_csv
 from app.db.redis_store import QUALITY_CODES
 from app.schemas import AlarmOut, EventOut, FlagPoint, RawPoint, SeriesResponse
 from app.services.hot import read_hot, watermarks
-from app.services.journal import list_alarms, list_events
+from app.services.journal import list_alarms, significant_events
 from app.state import AppState
 
 router = APIRouter(prefix="/api", tags=["data"])
 
-MAX_FLAGS = 10_000
+MAX_FLAGS = 5_000
+MAX_EVENTS = 1_000
 
 
 @router.get("/series", response_model=SeriesResponse)
@@ -44,10 +45,12 @@ async def get_series(
     resp = SeriesResponse(t_from=a, t_to=b, width_px=width, series=series, timing_ms=timing)
     if events:
         async with st.pg() as s:
-            resp.events = [EventOut.model_validate(e) for e in await list_events(s, chs, a, b)]
+            evs, resp.events_total = await significant_events(s, chs, a, b, limit=MAX_EVENTS)
+            resp.events = [EventOut.model_validate(e) for e in evs]
             resp.alarms = [AlarmOut.model_validate(x) for x in await list_alarms(s, chs, a, b)]
     if flags:
-        resp.flags = [FlagPoint(**f) for f in await st.qdb.fetch_flags(chs, a, b, limit=MAX_FLAGS)]
+        fl, resp.flags_total = await st.qdb.fetch_flags_info(chs, a, b, limit=MAX_FLAGS)
+        resp.flags = [FlagPoint(**f) for f in fl]
     resp.timing_ms["total"] = round((time.perf_counter() - t0) * 1000, 2)
     return resp
 

@@ -60,6 +60,8 @@ async function loadSeries(reqId: number, url: string) {
           events: j.events,
           flags: j.flags,
           alarms: j.alarms,
+          eventsTotal: j.events_total ?? j.events.length,
+          flagsTotal: j.flags_total ?? j.flags.length,
           timingMs: j.timing_ms,
           parseMs: performance.now() - t0,
         },

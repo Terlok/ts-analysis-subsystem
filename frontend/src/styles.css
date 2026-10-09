@@ -586,3 +586,51 @@ select.input {
 .sys .table th {
   position: static;
 }
+
+/* parameter search */
+.search {
+  position: relative;
+}
+.suggest {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  width: 320px;
+  background: #eef3f6;
+  border: 1px solid var(--btn-border);
+  border-radius: 3px;
+  box-shadow: 0 4px 12px rgba(31, 61, 82, 0.18);
+  z-index: 20;
+}
+.suggest-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.suggest-item.active {
+  background: var(--btn-active);
+}
+.suggest-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-side {
+  white-space: nowrap;
+}
+.suggest-empty {
+  padding: 5px 8px;
+}
+
+.layer-note {
+  position: absolute;
+  top: 4px;
+  right: 14px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  background: rgba(238, 243, 246, 0.85);
+  padding: 1px 6px;
+  border-radius: 3px;
+}

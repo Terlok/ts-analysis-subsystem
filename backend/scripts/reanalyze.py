@@ -167,13 +167,13 @@ def main() -> int:
             writer.flush()
             if eps:
                 with sm() as sess:
-                    sess.execute(insert(Event).values([
+                    sess.execute(insert(Event), [
                         {"channel_id": cid, "kind": e.kind, "ts_start": e.ts_start, "ts_end": e.ts_end,
                          "n_points": e.n_points, "peak_ts": e.peak_ts, "peak_value": float(e.peak_value),
                          "score": float(e.peak_score), "run": run, "model_version": e.details.get("model"),
                          "details": {**e.details, "params": params.__dict__}}
                         for e in eps
-                    ]))
+                    ])
                     sess.commit()
 
     if all_labels:

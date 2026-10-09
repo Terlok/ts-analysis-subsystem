@@ -12,7 +12,14 @@ from sqlalchemy import select, update
 from app.api.deps import get_state
 from app.db.models import ModelVersion
 from app.db.redis_store import MODELS_VERSION_KEY
-from app.schemas import AnalysisPreviewRequest, AnalysisPreviewResponse, FlagPoint, ModelVersionOut
+from app.schemas import (
+    AnalysisPreviewRequest,
+    AnalysisPreviewResponse,
+    FlagPoint,
+    ModelVersionOut,
+    TrainingJobOut,
+    TrainRequest,
+)
 from app.services.models_store import load_active
 from app.state import AppState
 from tsa_core.pipeline import ChannelParams, ChannelProcessor
@@ -48,6 +55,21 @@ async def activate_model(model_id: int, st: AppState = Depends(get_state)):
         await s.refresh(mv)
     await st.redis.incr(MODELS_VERSION_KEY)  # analytics workers reload models
     return mv
+
+
+@router.post("/models/train", response_model=TrainingJobOut, status_code=202)
+async def train_model(body: TrainRequest, st: AppState = Depends(get_state)):
+    """Train the forecasting model of a channel on archived data in a separate process.
+    The new version is registered and (by default) activated; analytics workers reload it."""
+    if await st.registry.get(body.channel) is None:
+        raise HTTPException(404, "channel not found")
+    job = st.trainer.submit(body.channel, body.t_from, body.t_to, body.trees, body.depth, body.activate)
+    return TrainingJobOut(**job.__dict__)
+
+
+@router.get("/models/jobs", response_model=list[TrainingJobOut])
+async def training_jobs(st: AppState = Depends(get_state)):
+    return [TrainingJobOut(**j.__dict__) for j in st.trainer.list()]
 
 
 @router.post("/analysis/preview", response_model=AnalysisPreviewResponse)

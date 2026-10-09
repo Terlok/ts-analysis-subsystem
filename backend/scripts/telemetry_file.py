@@ -125,6 +125,59 @@ def read_chunks(path: str | Path, cols: Columns | None = None, chunk_rows: int =
         yield frame_to_chunk(df, cols)
 
 
+def merged_chunks(
+    paths: list[str | Path], cols: Columns | None = None, chunk_rows: int = 200_000, fmt: str = "auto"
+) -> Iterator[Chunk]:
+    """K-way merge of several time-ordered files into one time-ordered stream of chunks.
+
+    Rows are released only up to the smallest "last timestamp" among the buffers of files
+    that still have unread data, so the output is ordered across files without loading
+    them into memory.
+    """
+    iters = [read_chunks(p, cols, chunk_rows, fmt) for p in paths]
+    bufs: list[Chunk | None] = [None] * len(iters)
+    done = [False] * len(iters)
+
+    def refill(i: int) -> None:
+        while not done[i] and (bufs[i] is None or len(bufs[i]) == 0):
+            try:
+                c = next(iters[i])
+            except StopIteration:
+                done[i] = True
+                return
+            if np.any(np.diff(c.ts) < 0):
+                c = c.take(np.argsort(c.ts, kind="stable"))
+            bufs[i] = c if bufs[i] is None or len(bufs[i]) == 0 else Chunk.concat([bufs[i], c])
+
+    while True:
+        for i in range(len(iters)):
+            refill(i)
+        live = [i for i in range(len(iters)) if bufs[i] is not None and len(bufs[i])]
+        if not live:
+            return
+        open_files = [i for i in live if not done[i]]
+        boundary = min(int(bufs[i].ts[-1]) for i in open_files) if open_files else None
+        parts = []
+        for i in live:
+            b = bufs[i]
+            k = len(b) if boundary is None else int(np.searchsorted(b.ts, boundary, side="right"))
+            if k:
+                parts.append(b.take(slice(0, k)))
+                bufs[i] = b.take(slice(k, None))
+        out = Chunk.concat(parts)
+        if len(parts) > 1:
+            out = out.take(np.argsort(out.ts, kind="stable"))
+        yield out
+
+
+def first_timestamp(path: str | Path, cols: Columns | None = None, fmt: str = "auto") -> int | None:
+    """Timestamp (us) of the first row of a file, without reading the whole file."""
+    for c in read_chunks(path, cols, chunk_rows=1000, fmt=fmt):
+        if len(c):
+            return int(c.ts.min())
+    return None
+
+
 def filter_chunk(c: Chunk, channels: set[str] | None, t_from: int | None, t_to: int | None) -> Chunk:
     mask = np.ones(len(c), dtype=bool)
     if channels:

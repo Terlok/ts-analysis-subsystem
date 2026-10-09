@@ -96,17 +96,34 @@ class QuestDBReader:
         return np.array([tuple(r) for r in rows], dtype=AGG_DTYPE) if rows else np.empty(0, AGG_DTYPE)
 
     async def fetch_flags(self, channels: list[str], t_from: int, t_to: int, run: str = "online", limit: int = 100_000):
+        """Point flags of the interval. If there are more than `limit`, only the most significant
+        anomalies (largest residual relative to the threshold) are returned, so that a long
+        interval shows the strongest events wherever they are instead of the first ones."""
+        return (await self.fetch_flags_info(channels, t_from, t_to, run, limit))[0]
+
+    async def fetch_flags_info(self, channels: list[str], t_from: int, t_to: int, run: str = "online", limit: int = 100_000):
+        """-> (flags, total number of flags in the interval)."""
         if not channels:
-            return []
+            return [], 0
         marks = ",".join(["%s"] * len(channels))
-        rows = await self._fetch(
-            "SELECT channel, cast(ts AS long), " + ", ".join(FLAG_COLUMNS) + ", substituted, anomaly "
-            f"FROM point_flags WHERE channel IN ({marks}) AND run = %s "
-            f"AND ts >= {_ts(t_from)} AND ts < {_ts(t_to)} LIMIT {int(limit)}",
-            (*channels, run),
-        )
+        where = f"channel IN ({marks}) AND run = %s AND ts >= {_ts(t_from)} AND ts < {_ts(t_to)}"
+        total = (await self._fetch(f"SELECT count() FROM point_flags WHERE {where}", (*channels, run)))[0][0]
+        cols = "SELECT channel, cast(ts AS long), " + ", ".join(FLAG_COLUMNS) + ", substituted, anomaly FROM point_flags"
+        if total <= limit:
+            rows = await self._fetch(f"{cols} WHERE {where}", (*channels, run))
+        else:
+            # scores of different channels are not comparable: every channel gets its share
+            per = max(1, limit // len(channels))
+            rows = []
+            for ch in channels:
+                rows += await self._fetch(
+                    f"{cols} WHERE channel = %s AND run = %s AND ts >= {_ts(t_from)} AND ts < {_ts(t_to)} "
+                    f"AND anomaly ORDER BY resid / thr DESC LIMIT {per}",
+                    (ch, run),
+                )
+            rows.sort(key=lambda r: r[1])
         keys = ("channel", "ts", *FLAG_COLUMNS, "substituted", "anomaly")
-        return [dict(zip(keys, r)) for r in rows]
+        return [dict(zip(keys, r)) for r in rows], int(total)
 
     async def channel_stats(self) -> list[tuple[str, int, int, int]]:
         """(channel, count, first_ts, last_ts) for every channel present in the archive."""

@@ -86,3 +86,48 @@ def test_aggregator_seed_merges_with_stored_buckets():
     agg.add(ts[5:20], np.arange(5.0, 20.0))
     rows = {int(r["ts"]): r for r in agg.flush_all()[0]}
     assert rows[0]["cnt"] == 10 and rows[0]["vmin"] == 0.0 and rows[10 * SEC]["cnt"] == 10
+
+
+def test_write_episodes_handles_thousands_of_rows(monkeypatch):
+    """A history import closes thousands of episodes in one batch: the INSERT must be batched."""
+    import os
+
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import sessionmaker
+
+    dsn = os.environ.get("TSA_TEST_POSTGRES_DSN")
+    if not dsn:
+        import pytest
+
+        pytest.skip("set TSA_TEST_POSTGRES_DSN to run against PostgreSQL")
+    from app.db.models import Base
+    from tsa_core.detectors import Episode
+
+    engine = create_engine(dsn)
+    Base.metadata.create_all(engine)
+    a = make_analytics()
+    a.sm = sessionmaker(engine)
+    del a.write_episodes  # use the real method
+    eps = [("A", Episode("outlier", i, i, 1, i, 1.0, 1.0, {"model": "naive"})) for i in range(8000)]
+    Analytics.write_episodes(a, eps)
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM events WHERE channel_id = 'A'")).scalar() >= 8000
+        c.execute(text("DELETE FROM events WHERE channel_id = 'A'"))
+        c.commit()
+
+
+def test_claim_stale_takes_over_messages_of_dead_consumer():
+    from app.config import Settings
+    from workers.common import StreamConsumer
+
+    s = Settings()
+    seen = []
+    c = StreamConsumer(s, "g", "new-consumer", lambda batch: seen.extend(e for e, _ in batch))
+    c.r = fakeredis.FakeRedis()
+    c.ensure_group()
+    for i in range(3):
+        c.r.xadd(s.stream_key, {b"p": orjson.dumps({"t_ing": 0, "ch": []})})
+    c.r.xreadgroup("g", "dead-consumer", {s.stream_key: ">"}, count=10)  # delivered, never acked
+    assert c.claim_stale(min_idle_ms=0) == 3
+    resp = c.r.xreadgroup("g", "new-consumer", {s.stream_key: "0"}, count=10)
+    assert len(resp[0][1]) == 3

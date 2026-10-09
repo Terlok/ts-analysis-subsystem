@@ -14,6 +14,7 @@ from app.services.ingest import IngestService
 from app.services.live import LiveHub
 from app.services.series import SeriesService
 from app.services.tiles import TileCache
+from app.services.training import ModelTrainer
 from app.state import AppState
 from tests.test_services import FakeQdb, FakeRegistry
 
@@ -48,6 +49,7 @@ def client():
         settings=settings, redis=redis, pg_engine=FakeEngine(), pg=None, qdb=qdb, registry=reg,
         ingest=IngestService(settings, redis, reg), tiles=tiles,
         series=SeriesService(settings, redis, qdb, tiles), live=LiveHub(settings, redis),
+        trainer=ModelTrainer(),
     )
     with TestClient(create_app(settings, st)) as c:
         yield c

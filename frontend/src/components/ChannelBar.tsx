@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { api, errorText } from "../api/client";
 import { engine } from "../lib/engine";
-import { fmtDateTime, fmtNum, fromLocalInput, sToUs, toLocalInput } from "../lib/format";
+import { fmtDateTime, fromLocalInput, sToUs, toLocalInput } from "../lib/format";
 import { useAppData, useEngine } from "../lib/hooks";
 import { workspaces, type Workspace } from "../lib/workspaces";
+import { ChannelSearch } from "./ChannelSearch";
 
 export interface Layers {
   events: boolean;
@@ -20,7 +21,6 @@ interface Props {
 export function ChannelBar({ ws, layers, onLayers }: Props) {
   const { channels, states, colorOf } = useAppData();
   const snap = useEngine();
-  const [pick, setPick] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
 
@@ -28,13 +28,6 @@ export function ChannelBar({ ws, layers, onLayers }: Props) {
     setFrom(toLocalInput(snap.range[0]));
     setTo(toLocalInput(snap.range[1]));
   }, [snap.range[0], snap.range[1]]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const add = () => {
-    const id = pick.trim();
-    if (!id || ws.channels.includes(id)) return;
-    workspaces.update(ws.id, { channels: [...ws.channels, id] });
-    setPick("");
-  };
 
   const applyRange = () => {
     const a = fromLocalInput(from);
@@ -54,32 +47,15 @@ export function ChannelBar({ ws, layers, onLayers }: Props) {
     }
   };
 
-  const available = channels.filter((c) => !ws.channels.includes(c.id));
-
   return (
     <div className="channelbar">
       <div className="group">
-        <input
-          className="input"
-          list="channel-list"
-          placeholder="Канал (тег)…"
-          value={pick}
-          onChange={(e) => setPick(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && add()}
-          style={{ width: 170 }}
+        <ChannelSearch
+          channels={channels}
+          states={states}
+          exclude={ws.channels}
+          onPick={(id) => workspaces.update(ws.id, { channels: [...ws.channels, id] })}
         />
-        <datalist id="channel-list">
-          {available.map((c) => (
-            <option key={c.id} value={c.id}>
-              {[c.name !== c.id ? c.name : null, c.unit, states[c.id]?.last_val != null ? fmtNum(states[c.id].last_val, 2) : null]
-                .filter(Boolean)
-                .join(" · ")}
-            </option>
-          ))}
-        </datalist>
-        <button className="btn" onClick={add} disabled={!pick.trim()}>
-          Додати
-        </button>
         {ws.channels.map((c) => (
           <span key={c} className="chip" style={{ borderColor: colorOf(c) }}>
             <i className="swatch" style={{ background: colorOf(c) }} />

@@ -86,6 +86,25 @@ class StreamConsumer:
             if "BUSYGROUP" not in str(e):
                 raise
 
+    def claim_stale(self, min_idle_ms: int = 60_000) -> int:
+        """Take over messages left unacknowledged by consumers that died (consumer names
+        contain the PID, so a restarted worker is a new consumer and would never see them)."""
+        claimed = 0
+        start = "0-0"
+        while True:
+            resp = self.r.xautoclaim(self.stream, self.group, self.consumer, min_idle_ms, start_id=start, count=500)
+            start, msgs = resp[0], resp[1]
+            claimed += len(msgs)
+            if start in (b"0-0", "0-0") or not msgs:
+                break
+        for c in self.r.xinfo_consumers(self.stream, self.group):
+            name = c["name"].decode() if isinstance(c["name"], bytes) else c["name"]
+            if name != self.consumer and c.get("pending", 0) == 0 and c.get("idle", 0) > min_idle_ms:
+                self.r.xgroup_delconsumer(self.stream, self.group, name)
+        if claimed:
+            log.warning("%s: took over %d unacknowledged message(s) of stopped consumers", self.group, claimed)
+        return claimed
+
     def ack(self, ids: list[bytes]) -> None:
         if ids:
             self.r.xack(self.stream, self.group, *ids)
@@ -97,7 +116,9 @@ class StreamConsumer:
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
         self.ensure_group()
+        self.claim_stale()
         cursor = "0"  # first re-process own pending messages, then switch to new ones
+        last_claim = time.monotonic()
         log.info("consumer %s/%s started on %s", self.group, self.consumer, self.stream)
         while not self._stop:
             try:
@@ -109,9 +130,20 @@ class StreamConsumer:
                 log.warning("redis unavailable, retrying")
                 time.sleep(1)
                 continue
+            except redis.ResponseError as e:
+                if "NOGROUP" not in str(e):
+                    raise
+                log.warning("stream or consumer group was deleted (data reset?), recreating the group")
+                self.ensure_group()
+                cursor = "0"
+                continue
             entries = resp[0][1] if resp else []
             if cursor == "0" and not entries:
                 cursor = ">"
+            if time.monotonic() - last_claim > 60:  # another copy of this worker may have died
+                last_claim = time.monotonic()
+                if self.claim_stale():
+                    cursor = "0"
             batch = []
             for entry_id, fields in entries:
                 if not fields:  # pending entry already trimmed from the stream

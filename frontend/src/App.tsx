@@ -65,6 +65,12 @@ function ChartArea({ ws, layers }: { ws: Workspace; layers: Layers }) {
           />
         ))
       )}
+      {(snap.layerCounts.events > snap.layerCounts.eventsShown || snap.layerCounts.flags > snap.layerCounts.flagsShown) && (
+        <div className="layer-note" title="На довгому інтервалі показано лише найзначущіші; наблизьте, щоб побачити всі">
+          показано найзначущіші: подій {snap.layerCounts.eventsShown.toLocaleString("uk-UA")} з {snap.layerCounts.events.toLocaleString("uk-UA")}, позначок{" "}
+          {snap.layerCounts.flagsShown.toLocaleString("uk-UA")} з {snap.layerCounts.flags.toLocaleString("uk-UA")}
+        </div>
+      )}
       {empty && (
         <div className="hint">
           У живому вікні немає даних. Запустіть відтворювач (<code>python -m scripts.replay data/…</code>) або відкрийте «Архів».

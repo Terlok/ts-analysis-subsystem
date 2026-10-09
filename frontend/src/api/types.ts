@@ -137,6 +137,8 @@ export interface SeriesResponseJson {
   events: EventItem[];
   flags: FlagPoint[];
   alarms: Alarm[];
+  events_total: number;
+  flags_total: number;
   timing_ms: Record<string, number>;
 }
 
@@ -222,4 +224,16 @@ export interface ClientConfig {
   live_rate_hz: number;
   live_max_window_s: number;
   grid: { delta0_us: number; base: number; levels: number[]; tile_buckets: number };
+}
+
+export interface TrainingJob {
+  id: string;
+  channel: string;
+  t_from: Micros | null;
+  t_to: Micros | null;
+  status: "queued" | "running" | "done" | "error";
+  created_at: number; // unix seconds
+  finished_at: number | null;
+  result: { model_id: number; version: string; path: string; active: boolean; metrics: Record<string, number> } | null;
+  error: string | null;
 }

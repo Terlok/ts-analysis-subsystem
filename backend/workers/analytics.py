@@ -309,7 +309,9 @@ class Analytics:
             for cid, e in episodes
         ]
         with self.sm() as s:
-            ids = s.execute(insert(Event).values(values).returning(Event.id)).scalars().all()
+            # executemany: SQLAlchemy batches the rows ("insertmanyvalues"), so a burst of
+            # thousands of episodes (history import) stays within PostgreSQL's 65535 parameters
+            ids = s.scalars(insert(Event).returning(Event.id, sort_by_parameter_order=True), values).all()
             s.commit()
         for eid, v in zip(ids, values):
             self.r.publish(PUBSUB_EVENTS, orjson.dumps({"type": "event", "channel": v["channel_id"], "id": eid, **v}))

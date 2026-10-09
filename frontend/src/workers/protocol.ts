@@ -23,6 +23,8 @@ export interface SeriesPayload {
   events: EventItem[];
   flags: FlagPoint[];
   alarms: Alarm[];
+  eventsTotal: number;
+  flagsTotal: number;
   timingMs: Record<string, number>;
   parseMs: number;
 }

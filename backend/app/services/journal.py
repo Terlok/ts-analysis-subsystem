@@ -30,6 +30,28 @@ async def list_events(
     return list((await s.execute(q)).scalars().all())
 
 
+async def significant_events(
+    s: AsyncSession, channels: list[str], t_from: int, t_to: int, run: str = "online", limit: int = 1000
+) -> tuple[list[Event], int]:
+    """Events of an interval for the chart layer: all of them if they fit into `limit`,
+    otherwise the `limit` events with the highest score (spread over the whole interval)."""
+    from sqlalchemy import func
+
+    cond = and_(Event.run == run, Event.channel_id.in_(channels), Event.ts_end >= t_from, Event.ts_start < t_to)
+    total = (await s.execute(select(func.count()).select_from(Event).where(cond))).scalar_one()
+    if total <= limit:
+        rows = list((await s.execute(select(Event).where(cond))).scalars().all())
+    else:
+        # scores of different channels are not comparable: every channel gets its share
+        per = max(1, limit // len(channels))
+        rows = []
+        for ch in channels:
+            q = select(Event).where(cond, Event.channel_id == ch).order_by(Event.score.desc().nulls_last()).limit(per)
+            rows += list((await s.execute(q)).scalars().all())
+    rows.sort(key=lambda e: e.ts_start)
+    return rows, int(total)
+
+
 async def list_alarms(
     s: AsyncSession,
     channels: list[str] | None = None,

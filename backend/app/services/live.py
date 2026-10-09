@@ -45,7 +45,7 @@ class _ChannelView:
     def __init__(self, delta: int, window_us: int):
         self.lttb = StreamingGridLTTB(delta)
         self.window_us = window_us
-        self.t_ing_max: int | None = None
+        self.t_ing_new: int | None = None  # earliest ingest time of data not yet sent
 
     def pending(self) -> tuple[list, list]:
         fin = self.lttb.drain()
@@ -145,7 +145,8 @@ class LiveHub:
                 if arrays is None:
                     arrays = packet_arrays(ch)
                 view.lttb.push(arrays[0], arrays[1])
-                view.t_ing_max = t_ing
+                if t_ing is not None and view.t_ing_new is None:
+                    view.t_ing_new = t_ing
                 sub.dirty = True
 
     async def _pubsub_loop(self) -> None:
@@ -187,8 +188,10 @@ class LiveHub:
                     continue
                 series.append({"channel": ch, "t": [p[0] for p in fin], "v": [p[1] for p in fin],
                                "tail_t": [p[0] for p in tail], "tail_v": [p[1] for p in tail]})
-                if view.t_ing_max is not None:
-                    t_ing_min = view.t_ing_max if t_ing_min is None else min(t_ing_min, view.t_ing_max)
+                # latency of this update: oldest data in it, not the last packet of a slow channel
+                if view.t_ing_new is not None:
+                    t_ing_min = view.t_ing_new if t_ing_min is None else min(t_ing_min, view.t_ing_new)
+                    view.t_ing_new = None
             events, sub.outbox = sub.outbox, []
             t_send = _now_us()
             msg = {"type": "update", "series": series, "events": events, "t_send": t_send, "t_ing": t_ing_min}
