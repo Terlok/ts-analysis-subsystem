@@ -6,7 +6,7 @@ FastAPI-сервер, потокові воркери та аналітичне 
 ```
 replay.py ──ws/ingest──► API (FastAPI) ──XADD──► Redis Stream telem:in
                          │  (перевірка, якість, t_ing,    │ consumer groups
-                         │   гаряче вікно, last, wm)      ├─► archiver   → QuestDB telemetry
+                         │   гаряче вікно, last, wm)      ├─► archiver   → QuestDB telemetry_raw
                          │                                ├─► analytics  → QuestDB point_flags,
                          │                                │                PostgreSQL events/alarms,
                          │                                │                Redis Pub/Sub
@@ -68,7 +68,8 @@ python -m scripts.export_questdb --url http://REMOTE:9000 --last 6h --ids P1,P2 
 Підходить і власний CSV або Parquet з колонками `id, ts, val, nd, otkl`. Час може бути в ISO 8601 або
 числом (с / мс / мкс / нс, одиниця визначається автоматично). Назви колонок задаються через `--col-*`.
 
-**Імітація надсилання сигналів:**
+**Імітація надсилання сигналів.** Файли з даними кладіть у `backend/data/` (папка ігнорується git).
+Команди нижче запускаються з `backend/`:
 
 ```bash
 python -m scripts.replay data/analog.csv.gz                    # реальний час, мітки зсунуті на «зараз»
@@ -109,7 +110,7 @@ python -m scripts.make_sample data/sample.csv --channels 8 --hours 2
 
 | Сховище | Що зберігає |
 |---|---|
-| QuestDB `telemetry` | первинні вимірювання: `channel, ts, val, quality, nd, otkl, t_ing`, `DEDUP (ts, channel)` |
+| QuestDB `telemetry_raw` | первинні вимірювання: `channel, ts, val, quality, nd, otkl, t_ing`, `DEDUP (ts, channel)` |
 | QuestDB `point_flags` | розріджено: замінені Гампелем і аномальні точки (`val_f`, прогноз, залишок, поріг, ймовірність), `run` = `online` або id повторного аналізу |
 | QuestDB `telemetry_agg` | агрегати рівнів ℓ: min/max з часом, first/last, Σ, count |
 | PostgreSQL | реєстр каналів Mᵢ, правила й журнал тривог, епізоди подій з посиланням `(channel, ts)`, версії моделей, режими робота |

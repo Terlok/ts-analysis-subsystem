@@ -1,4 +1,4 @@
-"""Recompute multi-level aggregates from raw `telemetry` (exact, idempotent upserts).
+"""Recompute multi-level aggregates from raw `telemetry_raw` (exact, idempotent upserts).
 
 Use after a bulk history import, after late data beyond Delta_late, or if the
 aggregator was interrupted. Clear the Redis tile cache afterwards (--clear-cache).

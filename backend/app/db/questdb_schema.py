@@ -1,12 +1,17 @@
 """DDL of the subsystem's own QuestDB tables.
 
 The source table `analog` (id, ts, val, nd, otkl) is only read/replayed; measurements
-of the subsystem go to `telemetry`. Dedup keys make every write idempotent
+of the subsystem go to `telemetry_raw` (not `telemetry`: QuestDB has a hidden system
+table with that name, used for its own usage statistics). Dedup keys make every write idempotent
 (ФВ-1.4, ФВ-2.2): re-delivered packets after a restart do not create duplicates.
 """
 
-TELEMETRY = """
-CREATE TABLE IF NOT EXISTS telemetry (
+RAW_TABLE = "telemetry_raw"
+FLAGS_TABLE = "point_flags"
+AGG_TABLE = "telemetry_agg"
+
+TELEMETRY = f"""
+CREATE TABLE IF NOT EXISTS {RAW_TABLE} (
     channel SYMBOL CAPACITY 4096 CACHE INDEX,
     ts TIMESTAMP,
     val DOUBLE,
@@ -60,6 +65,14 @@ DEDUP UPSERT KEYS(ts, channel, lvl)
 
 ALL = [TELEMETRY, POINT_FLAGS, TELEMETRY_AGG]
 
+# Columns every table must have after creation (guards against silently reusing an
+# existing table of the same name).
+EXPECTED_COLUMNS = {
+    RAW_TABLE: {"channel", "ts", "val", "quality", "nd", "otkl", "t_ing"},
+    FLAGS_TABLE: {"channel", "run", "ts", "val_f", "substituted", "anomaly"},
+    AGG_TABLE: {"channel", "lvl", "ts", "vmin", "tmin", "vmax", "tmax", "cnt"},
+}
+
 # Optional retention policies (separate for raw data and aggregates, ФВ-2.2), e.g.:
-#   ALTER TABLE telemetry SET TTL 8 WEEKS;
+#   ALTER TABLE telemetry_raw SET TTL 8 WEEKS;
 #   ALTER TABLE point_flags SET TTL 8 WEEKS;

@@ -19,6 +19,7 @@ import psycopg
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import Settings
+from app.db.questdb_schema import RAW_TABLE
 from tsa_core.aggregates import AGG_DTYPE
 
 try:  # questdb >= 5
@@ -68,7 +69,7 @@ class QuestDBReader:
 
     async def fetch_raw(self, channel: str, t_from: int, t_to: int, limit: int) -> np.ndarray:
         rows = await self._fetch(
-            "SELECT cast(ts AS long), val, quality, nd, otkl FROM telemetry "
+            f"SELECT cast(ts AS long), val, quality, nd, otkl FROM {RAW_TABLE} "
             f"WHERE channel = %s AND ts >= {_ts(t_from)} AND ts < {_ts(t_to)} LIMIT {int(limit)}",
             (channel,),
         )
@@ -79,7 +80,7 @@ class QuestDBReader:
 
     async def count_raw(self, channel: str, t_from: int, t_to: int) -> int:
         rows = await self._fetch(
-            f"SELECT count() FROM telemetry WHERE channel = %s AND ts >= {_ts(t_from)} AND ts < {_ts(t_to)}",
+            f"SELECT count() FROM {RAW_TABLE} WHERE channel = %s AND ts >= {_ts(t_from)} AND ts < {_ts(t_to)}",
             (channel,),
         )
         return int(rows[0][0]) if rows else 0
@@ -110,7 +111,7 @@ class QuestDBReader:
     async def channel_stats(self) -> list[tuple[str, int, int, int]]:
         """(channel, count, first_ts, last_ts) for every channel present in the archive."""
         rows = await self._fetch(
-            "SELECT channel, count(), cast(min(ts) AS long), cast(max(ts) AS long) FROM telemetry GROUP BY channel"
+            f"SELECT channel, count(), cast(min(ts) AS long), cast(max(ts) AS long) FROM {RAW_TABLE} GROUP BY channel"
         )
         return [(r[0], int(r[1]), int(r[2]), int(r[3])) for r in rows]
 
@@ -134,7 +135,7 @@ class QuestDBSyncReader:
             while t < t_to:
                 t_end = min(t + chunk_us, t_to)
                 rows = conn.execute(
-                    f"SELECT cast(ts AS long), val FROM telemetry WHERE channel = %s "
+                    f"SELECT cast(ts AS long), val FROM {RAW_TABLE} WHERE channel = %s "
                     f"AND ts >= {_ts(t)} AND ts < {_ts(t_end)}{quality}",
                     (channel,),
                 ).fetchall()
@@ -147,7 +148,7 @@ class QuestDBSyncReader:
         where = "WHERE channel = %s" if channel else ""
         with self.connect() as conn:
             row = conn.execute(
-                f"SELECT cast(min(ts) AS long), cast(max(ts) AS long) FROM telemetry {where}",
+                f"SELECT cast(min(ts) AS long), cast(max(ts) AS long) FROM {RAW_TABLE} {where}",
                 (channel,) if channel else (),
             ).fetchone()
         if not row or row[0] is None:
@@ -167,7 +168,7 @@ class QuestDBSyncReader:
 
     def channels(self) -> list[str]:
         with self.connect() as conn:
-            return [r[0] for r in conn.execute("SELECT DISTINCT channel FROM telemetry").fetchall()]
+            return [r[0] for r in conn.execute(f"SELECT DISTINCT channel FROM {RAW_TABLE}").fetchall()]
 
     def execute(self, sql: str) -> None:
         with self.connect() as conn:
@@ -200,7 +201,7 @@ class IlpWriter:
             if v == v:
                 cols["val"] = v
             row(
-                "telemetry",
+                RAW_TABLE,
                 symbols={"channel": channel, "quality": quality[i]},
                 columns=cols,
                 at=TimestampMicros(int(ts[i])),

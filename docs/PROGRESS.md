@@ -3,7 +3,7 @@
 Тема: «Підсистема візуалізації і аналізу часових рядів для веборієнтованих робототехнічних систем».
 Теоретична частина (розділ 1 дисертації) і стаття лежать локально в `task_conditions/` (не в git).
 
-Останнє оновлення: 2026-10-08.
+Останнє оновлення: 2026-10-09.
 
 ## Зроблено
 
@@ -24,7 +24,7 @@
   - канали, тривоги з квитуванням, події, режими, моделі, `/api/analysis/preview`;
   - живі графіки через `/ws/stream`; метрики `/api/metrics` (затримки, ρ_load, кеш).
 - **Воркери `workers/`**:
-  - `archiver` пише в QuestDB `telemetry`;
+  - `archiver` пише в QuestDB `telemetry_raw`;
   - `analytics` формує `point_flags`, події й тривоги в PostgreSQL та Pub/Sub;
   - `aggregator` будує `telemetry_agg`.
   Усі читають Redis Stream через consumer groups і підтверджують повідомлення після запису. `analytics` і `aggregator` шардуються за каналами.
@@ -34,7 +34,22 @@
   - `init_db.py`, `make_sample.py` (синтетика з розміткою);
   - `train_forecaster.py`, `reanalyze.py` (P/R/F1), `rebuild_aggregates.py`.
 - **Тести:** 37 штук, проходять без реальних БД (fakeredis, заглушки).
-- **Інфраструктура:** `docker-compose.yml` з QuestDB, PostgreSQL (порт 5433) і Redis.
+- **Інфраструктура:** `docker-compose.yml` з QuestDB 10.0.1, PostgreSQL 16.4 (порт 5433) і Redis 7.4.
+
+### Бази даних (2026-10-09)
+
+- Контейнери QuestDB, PostgreSQL і Redis підняті через `docker compose up -d`, схеми створені `scripts.init_db` і перевірені.
+- Наскрізна перевірка на синтетичних даних (6 каналів × 1 год, 20 973 точки) пройшла:
+  - replay → ingest → Redis Stream → archiver, analytics, aggregator → QuestDB і PostgreSQL;
+  - суми `cnt` агрегатів збігаються на всіх 8 рівнях;
+  - `/api/series` віддає дані з гарячого вікна й з агрегатів, кеш тайлів працює;
+  - `/ws/stream` дає затримку ingest → клієнт p50 ≈ 33 мс, p95 ≈ 52 мс;
+  - помилок у журналах немає.
+- Знайдені й виправлені проблеми:
+  - **Конфлікт назви таблиці.** У QuestDB є прихована службова таблиця `telemetry`, і `CREATE TABLE IF NOT EXISTS` мовчки її залишав. Наша таблиця перейменована на `telemetry_raw`, службова телеметрія QuestDB вимкнена (`QDB_TELEMETRY_ENABLED=false`), а `init_db` тепер перевіряє колонки створених таблиць.
+  - **Проксі.** За корпоративним проксі HTTP-клієнти, зокрема ILP-клієнт QuestDB, ходили на `localhost` через проксі. `get_settings()` тепер додає хости QuestDB і Redis у `NO_PROXY`.
+  - **Мережа Docker.** На Arch після оновлення ядра Docker не може створити мережу контейнерів (`veth ... operation not supported`), доки систему не перезавантажено.
+- У базах зараз лежать синтетичні тестові дані. Перед роботою з реальними даними їх варто очистити (див. нижче).
 
 ### Джерело даних
 
@@ -59,27 +74,29 @@ CREATE TABLE 'analog' (id SYMBOL INDEX CAPACITY 256, ts TIMESTAMP, val FLOAT, nd
 
 ## Наступні кроки
 
-1. Підняти локально QuestDB, PostgreSQL і Redis (`docker compose up -d` або власні інстанси) і заповнити `backend/.env` за зразком `.env.example`.
-2. Виконати `python -m scripts.init_db` і перевірити створення таблиць. **SQL на реальних QuestDB і PostgreSQL ще не перевірявся.**
-3. Вивантажити реальні дані з віддаленого сервера, запустити `./run_dev.sh` і `scripts/replay.py`, перевірити `/api/series`, `/api/metrics`, `/ws/stream`.
-4. Підтвердити семантику `nd` і `otkl`, заповнити метадані каналів (одиниці, діапазони, частоти) і правила тривог.
-5. Навчити моделі на реальних каналах і налаштувати k та κ через `reanalyze.py`.
-6. Фронтенд (React/Vite): Canvas, Web Workers, сценарії С1–С6.
-7. Експерименти за критеріями К1–К8 і оновлення розділу «Апробація» в дисертації.
+1. Покласти файл із реальними сигналами в `backend/data/` (ігнорується git). Очистити бази від синтетики:
+   `docker compose down -v && docker compose up -d && cd backend && .venv/bin/python -m scripts.init_db`.
+2. Запустити `./run_dev.sh` і `python -m scripts.replay data/<файл>`, перевірити `/api/series`, `/api/metrics`, `/ws/stream` на реальних даних.
+3. Підтвердити семантику `nd` і `otkl`, заповнити метадані каналів (одиниці, діапазони, частоти) і правила тривог.
+4. Навчити моделі на реальних каналах і налаштувати k та κ через `reanalyze.py`.
+5. Фронтенд (React/Vite): Canvas, Web Workers, сценарії С1–С6.
+6. Експерименти за критеріями К1–К8 і оновлення розділу «Апробація» в дисертації.
 
 ## Відомі обмеження
 
 - Агрегатор може подвоїти точки у відкритих кошиках, якщо впаде між записом і ACK. Відновлення — `scripts/rebuild_aggregates.py`.
 - Події, записані до ACK, при повторній обробці pending-повідомлень можуть задублюватися.
 - Клієнт `questdb` 5.x встановлює з'єднання при старті воркера, тому QuestDB має бути доступна до їх запуску.
-- Версії Docker-образів у `docker-compose.yml` вказані з пам'яті і можуть потребувати уточнення.
+- За корпоративним проксі демону Docker потрібен проксі в `/etc/systemd/system/docker.service.d/http-proxy.conf`, інакше образи не завантажуються.
 
 ## Відновлення середовища на іншому комп'ютері
 
 ```bash
-git clone https://github.com/Terlok/ts-analysis-subsystem.git && cd ts-analysis-subsystem/backend
-python3 -m venv .venv && .venv/bin/pip install -e ".[scripts,ml,dev]"
-.venv/bin/python -m pytest
+git clone https://github.com/Terlok/ts-analysis-subsystem.git && cd ts-analysis-subsystem
+docker compose up -d
+cd backend && python3 -m venv .venv && .venv/bin/pip install -e ".[scripts,ml,dev]"
+cp .env.example .env && .venv/bin/python -m scripts.init_db
+.venv/bin/python -m pytest && ./run_dev.sh
 ```
 
 Сесію Claude Code можна продовжити, скопіювавши файл

@@ -7,7 +7,7 @@
 
 services:
   questdb:
-    image: questdb/questdb:8.2.3
+    image: questdb/questdb:10.0.1
     restart: unless-stopped
     ports:
       - "9000:9000"   # HTTP: web console, /exec, /exp, ILP over HTTP
@@ -17,6 +17,7 @@ services:
       QDB_PG_USER: admin
       QDB_PG_PASSWORD: quest
       QDB_CAIRO_WAL_ENABLED_DEFAULT: "true"
+      QDB_TELEMETRY_ENABLED: "false"  # QuestDB's own usage statistics (hidden table `telemetry`)
     volumes:
       - questdb-data:/var/lib/questdb
 

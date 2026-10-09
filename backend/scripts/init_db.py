@@ -29,7 +29,17 @@ def main() -> int:
         q = QuestDBSyncReader(s)
         for ddl in questdb_schema.ALL:
             q.execute(ddl)
-        print(f"QuestDB {s.questdb_host}:{s.questdb_pg_port}: tables telemetry, point_flags, telemetry_agg ready")
+        # CREATE TABLE IF NOT EXISTS silently keeps a pre-existing table with the same name:
+        # verify that every table really has our columns.
+        with q.connect() as conn:
+            for table, expected in questdb_schema.EXPECTED_COLUMNS.items():
+                cols = {r[0] for r in conn.execute(f"SELECT \"column\" FROM table_columns('{table}')").fetchall()}
+                missing = expected - cols
+                if missing:
+                    print(f"ERROR: QuestDB table {table} exists with a different schema, missing {sorted(missing)}")
+                    return 1
+        tables = ", ".join(questdb_schema.EXPECTED_COLUMNS)
+        print(f"QuestDB {s.questdb_host}:{s.questdb_pg_port}: tables {tables} ready")
     if both or a.postgres:
         engine = make_sync_engine(s)
         Base.metadata.create_all(engine)

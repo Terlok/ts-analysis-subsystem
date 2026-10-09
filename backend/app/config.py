@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -105,6 +107,22 @@ class Settings(BaseSettings):
         )
 
 
+def bypass_proxy_for(hosts: list[str]) -> None:
+    """Exclude our own services from HTTP(S)_PROXY.
+
+    HTTP clients (the QuestDB ILP client, httpx, websockets) honour proxy variables from
+    the environment; behind a corporate proxy even requests to localhost would be sent
+    to the proxy and fail. Hosts are appended to NO_PROXY / no_proxy.
+    """
+    for var in ("NO_PROXY", "no_proxy"):
+        current = [h.strip() for h in os.environ.get(var, "").split(",") if h.strip()]
+        merged = current + [h for h in hosts if h and h not in current]
+        os.environ[var] = ",".join(merged)
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    redis_host = urlparse(s.redis_url).hostname or ""
+    bypass_proxy_for(["localhost", "127.0.0.1", "::1", s.questdb_host, redis_host])
+    return s

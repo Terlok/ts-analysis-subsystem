@@ -1,4 +1,4 @@
-"""Archiver: writes primary measurements from the stream to QuestDB `telemetry` (no decimation).
+"""Archiver: writes primary measurements from the stream to QuestDB `telemetry_raw` (no decimation).
 
     python -m workers.archiver
 """
