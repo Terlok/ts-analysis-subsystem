@@ -6,6 +6,7 @@ import "uplot/dist/uPlot.min.css";
 import type { ChartData, Overlays } from "../lib/engine";
 import { fmtDate, fmtDateTime, fmtNum, fmtTime } from "../lib/format";
 import { drawOverlays } from "./overlays";
+import { tooltipHtml } from "./tooltip";
 
 export interface ChartSeries {
   channel: string;
@@ -142,7 +143,22 @@ export function TimeChart(p: Props) {
         setCursor: [
           (u) => {
             const left = u.cursor.left;
-            props.current.onCursor?.(left != null && left >= 0 ? u.posToVal(left, "x") : null);
+            const inside = left != null && left >= 0;
+            const t = inside ? u.posToVal(left, "x") : null;
+            props.current.onCursor?.(t);
+            // the tooltip is shown only on the chart under the mouse (synced charts move the
+            // cursor too, but must not open their own tooltips)
+            if (t === null || !hovered) {
+              tip.style.display = "none";
+              return;
+            }
+            tip.innerHTML = tooltipHtml(u, props.current.series, props.current.getOverlays(), t, u.cursor.idx ?? null);
+            tip.style.display = "block";
+            const w = u.over.clientWidth;
+            const tw = tip.offsetWidth;
+            const x = left! + 14 + tw > w ? left! - 14 - tw : left! + 14;
+            const top = Math.min(Math.max((u.cursor.top ?? 0) - 10, 0), Math.max(u.over.clientHeight - tip.offsetHeight, 0));
+            tip.style.transform = `translate(${Math.max(0, x)}px, ${top}px)`;
           },
         ],
         draw: [
@@ -157,7 +173,20 @@ export function TimeChart(p: Props) {
         ],
       },
     };
+    const tip = document.createElement("div");
+    tip.className = "chart-tip";
+    let hovered = false;
     const u = new uPlot(opts, aligned(props.current.getData(), props.current.series), el);
+    u.over.appendChild(tip);
+    const onEnter = () => {
+      hovered = true;
+    };
+    const onLeave = () => {
+      hovered = false;
+      tip.style.display = "none";
+    };
+    u.over.addEventListener("mouseenter", onEnter);
+    u.over.addEventListener("mouseleave", onLeave);
     plot.current = u;
 
     const onWheel = (ev: WheelEvent) => {
@@ -192,6 +221,8 @@ export function TimeChart(p: Props) {
       ro.disconnect();
       u.over.removeEventListener("wheel", onWheel);
       u.over.removeEventListener("dblclick", onDbl);
+      u.over.removeEventListener("mouseenter", onEnter);
+      u.over.removeEventListener("mouseleave", onLeave);
       u.destroy();
       plot.current = null;
     };

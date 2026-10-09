@@ -22,7 +22,19 @@ function testStart(mt: Record<string, any>): number | null {
   return usToS(mt.t_from + (mt.t_to - mt.t_from) * frac);
 }
 
-function ModelDetails({ m, ws, onClose, onActivate }: { m: ModelVersion; ws: Workspace; onClose: () => void; onActivate: () => void }) {
+function ModelDetails({
+  m,
+  ws,
+  onClose,
+  onActivate,
+  onDelete,
+}: {
+  m: ModelVersion;
+  ws: Workspace;
+  onClose: () => void;
+  onActivate: () => void;
+  onDelete: () => void;
+}) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mt = (m.metrics ?? {}) as Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -39,7 +51,10 @@ function ModelDetails({ m, ws, onClose, onActivate }: { m: ModelVersion; ws: Wor
     engine.zoomTo(a, b);
     setBusy(true);
     try {
-      const r = await runPreview({ channel: m.channel_id, t_from: Math.floor(a * 1e6), t_to: Math.ceil(b * 1e6), use_model: true, model_id: m.id });
+      const r = await runPreview(
+        { channel: m.channel_id, t_from: Math.floor(a * 1e6), t_to: Math.ceil(b * 1e6), use_model: true, model_id: m.id },
+        `#${m.id} ${m.version}`,
+      );
       setCheck(`${fmtDateTime(a)} — ${fmtDateTime(b)}: ${maeText(r.mae_model, r.mae_naive)}; аномальних точок ${r.anomalies}, замінено ${r.substituted}`);
     } catch (e) {
       setCheck(errorText(e));
@@ -70,6 +85,9 @@ function ModelDetails({ m, ws, onClose, onActivate }: { m: ModelVersion; ws: Wor
         <button className="btn primary" onClick={show} disabled={busy || t0 === null} title="Перша година тестової частини: дані, яких модель не бачила під час навчання">
           {busy ? "Обчислення…" : "Показати на графіку (тестова частина)"}
         </button>
+        <button className="btn" onClick={onDelete} title="Видалити версію моделі та її файл">
+          Видалити
+        </button>
         <button className="btn" onClick={onClose}>
           ×
         </button>
@@ -98,6 +116,7 @@ function ModelDetails({ m, ws, onClose, onActivate }: { m: ModelVersion; ws: Wor
           {row("Інференс", mt.batch_inference_us_per_point != null ? `${mt.batch_inference_us_per_point} мкс/точку` : "—", "пакетний виклик")}
         </dl>
         <dl className="kv">
+          {row("Алгоритм", ALGO_UA[pr.algorithm ?? "hgb"] ?? pr.algorithm)}
           {row("Дерев / глибина", `${pr.trees ?? "—"} / ${pr.depth ?? "—"}`)}
           {row("w, κ Гампеля", `${pr.hampel_window ?? "—"}, ${pr.hampel_kappa ?? "—"}`)}
           {row("Вікно ознак", pr.feature_window ?? "—")}
@@ -109,6 +128,12 @@ function ModelDetails({ m, ws, onClose, onActivate }: { m: ModelVersion; ws: Wor
     </div>
   );
 }
+
+const ALGO_UA: Record<string, string> = {
+  hgb: "градієнтний бустинг",
+  rf: "випадковий ліс",
+  ridge: "лінійна регресія (Ridge)",
+};
 
 function gain(m: Record<string, unknown> | null): string {
   const g = m?.mae_gain;
@@ -124,8 +149,21 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
   const [trees, setTrees] = useState(100);
   const [depth, setDepth] = useState(6);
   const [activate, setActivate] = useState<"auto" | "always" | "never">("auto");
+  const [algorithm, setAlgorithm] = useState("hgb");
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+
+  const remove = async (m: ModelVersion) => {
+    const note = m.active ? "\nЦе активна модель: канал перейде на наївний прогноз." : "";
+    if (!confirm(`Видалити модель #${m.id} (${m.channel_id}, ${m.version})?${note}`)) return;
+    try {
+      await api.deleteModel(m.id);
+      if (selected === m.id) setSelected(null);
+      models.reload();
+    } catch (e) {
+      setErr(errorText(e));
+    }
+  };
 
   const models = usePolling(() => api.models(), 0);
   const jobs = usePolling(() => api.trainingJobs(), 2000);
@@ -141,7 +179,7 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
     const range =
       scope === "view" ? { t_from: Math.floor(a * 1e6), t_to: Math.ceil(b * 1e6) } : scope === "before" ? { t_to: Math.floor(a * 1e6) } : {};
     try {
-      await api.trainModel({ channel: ch, trees, depth, activate, ...range });
+      await api.trainModel({ channel: ch, trees, depth, activate, algorithm, ...range });
       jobs.reload();
     } catch (e) {
       setErr(errorText(e));
@@ -172,6 +210,16 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
               <option value="before">архів до початку видимого інтервалу</option>
             </select>
           </label>
+          <label className="wide" title="Ансамблі дерев з дисертації та лінійна базова модель">
+            Алгоритм
+            <select className="input" value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
+              {Object.entries(ALGO_UA).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
           <label title="Кількість дерев ансамблю (стаття: 100)">
             Дерев
             <input className="input" type="number" min={10} max={1000} value={trees} onChange={(e) => setTrees(Number(e.target.value))} />
@@ -183,7 +231,7 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
           <label className="wide" title="Модель, гірша за наївний прогноз, лише погіршить діагностику">
             Активація
             <select className="input" value={activate} onChange={(e) => setActivate(e.target.value as typeof activate)}>
-              <option value="auto">якщо точніша за наївний прогноз</option>
+              <option value="auto">якщо точніша за наївний прогноз і за поточну активну</option>
               <option value="always">завжди</option>
               <option value="never">лише зареєструвати</option>
             </select>
@@ -216,7 +264,9 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
               {(jobs.data ?? []).slice(0, 8).map((j) => (
                 <tr key={j.id} className={j.status === "error" ? "row-bad" : ""}>
                   <td>{fmtDateTime(j.created_at)}</td>
-                  <td>{j.channel}</td>
+                  <td>
+                    {j.channel} <span className="muted small">{j.algorithm}</span>
+                  </td>
                   <td>{{ queued: "у черзі", running: "навчання…", done: "готово", error: "помилка" }[j.status]}</td>
                   <td className="small" title={j.error ?? undefined}>
                     {j.result
@@ -237,6 +287,7 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
               m={sel}
               ws={ws}
               onClose={() => setSelected(null)}
+              onDelete={() => void remove(sel)}
               onActivate={async () => {
                 try {
                   await api.activateModel(sel.id);
@@ -306,6 +357,16 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
                         Активувати
                       </button>
                     )}
+                    <button
+                      className="btn"
+                      title="Видалити"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        void remove(m);
+                      }}
+                    >
+                      ✕
+                    </button>
                   </td>
                 </tr>
               );

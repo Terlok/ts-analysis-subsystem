@@ -112,9 +112,19 @@ export const api = {
   // models and offline analysis
   models: (channel?: string) => get<ModelVersion[]>("/api/models", { channel }),
   activateModel: (id: number) => request<ModelVersion>("POST", `/api/models/${id}/activate`),
-  trainModel: (r: { channel: string; t_from?: Micros | null; t_to?: Micros | null; trees?: number; depth?: number; activate?: "auto" | "always" | "never" }) =>
+  trainModel: (r: {
+    channel: string;
+    t_from?: Micros | null;
+    t_to?: Micros | null;
+    trees?: number;
+    depth?: number;
+    activate?: "auto" | "always" | "never";
+    algorithm?: string;
+  }) =>
     request<TrainingJob>("POST", "/api/models/train", undefined, r),
   trainingJobs: () => get<TrainingJob[]>("/api/models/jobs"),
+  deleteModel: (id: number) => request<void>("DELETE", `/api/models/${id}`),
+  modelAlgorithms: () => get<Record<string, string>>("/api/models/algorithms"),
   analysisPreview: (req: AnalysisPreviewRequest) =>
     request<AnalysisPreviewResponse>("POST", "/api/analysis/preview", undefined, req),
 };

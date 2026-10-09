@@ -35,5 +35,25 @@ def test_auto_activation_requires_gain():
 
     assert should_activate("auto", {"mae_gain": 0.2})
     assert not should_activate("auto", {"mae_gain": -0.1})
+    assert not should_activate("auto", {"mae_gain": 0.1}, active_gain=0.2)  # worse than the active model
+    assert should_activate("auto", {"mae_gain": 0.3}, active_gain=0.2)
     assert should_activate("always", {"mae_gain": -0.1})
     assert not should_activate("never", {"mae_gain": 0.5})
+
+
+@pytest.mark.parametrize("algorithm", ["hgb", "rf", "ridge"])
+def test_all_algorithms_train_and_plug_into_pipeline(algorithm):
+    n = 4000
+    ts = 1_760_000_000 * SEC + np.arange(n) * SEC
+    x = np.sin(np.arange(n) / 15) * 5 + 0.05 * np.random.default_rng(1).standard_normal(n)
+    model, metrics, params = train_forecaster(ts, x, 15, 3.0, 30, trees=20, depth=4, algorithm=algorithm)
+    assert model.version.startswith(f"{algorithm}-") and params["algorithm"] == algorithm
+    assert metrics["mae_test"] > 0
+    res = ChannelProcessor("c", forecaster=model).process(ts, x)
+    assert np.isfinite(res.pred[100:]).all()
+
+
+def test_unknown_algorithm_rejected():
+    ts = np.arange(1000) * SEC
+    with pytest.raises(TrainingError):
+        train_forecaster(ts, np.sin(np.arange(1000) / 10.0), 15, 3.0, 30, algorithm="svm")

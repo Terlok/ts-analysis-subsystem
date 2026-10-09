@@ -43,6 +43,35 @@ def robust_sigma(r: np.ndarray) -> float:
     return float(1.4826 * np.median(np.abs(r - np.median(r)))) if len(r) else float("nan")
 
 
+ALGORITHMS = {
+    "hgb": "градієнтний бустинг (HistGradientBoosting)",
+    "rf": "випадковий ліс (RandomForest)",
+    "ridge": "лінійна регресія (Ridge)",
+}
+
+
+def make_regressor(algorithm: str, trees: int, depth: int, n_rows: int):
+    """Tree ensembles of the thesis (random forest [9], gradient boosting [10]) and a linear
+    baseline. All predict the standardized increment from the window features."""
+    if algorithm == "hgb":
+        from sklearn.ensemble import HistGradientBoostingRegressor
+
+        return HistGradientBoostingRegressor(max_iter=trees, max_depth=depth, learning_rate=0.1, random_state=0)
+    if algorithm == "rf":
+        from sklearn.ensemble import RandomForestRegressor
+
+        # bootstrap subsamples keep fitting time bounded on millions of rows
+        return RandomForestRegressor(
+            n_estimators=trees, max_depth=depth, max_samples=min(1.0, 200_000 / max(n_rows, 1)),
+            min_samples_leaf=20, n_jobs=-1, random_state=0,
+        )
+    if algorithm == "ridge":
+        from sklearn.linear_model import Ridge
+
+        return Ridge(alpha=1.0)
+    raise TrainingError(f"unknown algorithm {algorithm!r}, expected one of {', '.join(ALGORITHMS)}")
+
+
 def train_forecaster(
     ts: np.ndarray,
     x: np.ndarray,
@@ -51,9 +80,9 @@ def train_forecaster(
     feature_window: int,
     trees: int = 100,
     depth: int = 6,
+    algorithm: str = "hgb",
 ) -> tuple[TreeForecaster, dict, dict]:
     """Returns (model, metrics, params). ts in us, x without NaN."""
-    from sklearn.ensemble import HistGradientBoostingRegressor
 
     if len(ts) < 10 * feature_window:
         raise TrainingError(f"too few points: {len(ts)} (need at least {10 * feature_window})")
@@ -75,12 +104,12 @@ def train_forecaster(
     sd = X[i[tr]].std(axis=0)
     sd[sd == 0] = 1.0
     y_scale = float(y[tr].std()) or 1.0
-    model = HistGradientBoostingRegressor(max_iter=trees, max_depth=depth, learning_rate=0.1, random_state=0)
+    model = make_regressor(algorithm, trees, depth, len(tr))
     t0 = time.perf_counter()
     model.fit((X[i[tr]] - mu) / sd, y[tr] / y_scale)
     fit_s = time.perf_counter() - t0
 
-    version = f"hgb-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    version = f"{algorithm}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:4]}"
     f = TreeForecaster(model, mu, sd, y_scale, version=version)
 
     def evaluate(part):
@@ -115,8 +144,9 @@ def train_forecaster(
         "hampel_window": hampel_window,
         "hampel_kappa": hampel_kappa,
         "feature_window": feature_window,
-        "trees": trees,
-        "depth": depth,
+        "algorithm": algorithm,
+        "trees": trees if algorithm != "ridge" else None,
+        "depth": depth if algorithm != "ridge" else None,
         "features": list(FEATURE_NAMES),
         "target": "increment",
     }
@@ -124,20 +154,25 @@ def train_forecaster(
     return f, metrics, params
 
 
-def should_activate(mode: str, metrics: dict) -> bool:
-    """'auto': only a model that beats the naive forecast on the test part replaces it."""
+def should_activate(mode: str, metrics: dict, active_gain: float | None = None) -> bool:
+    """'auto': the model must beat the naive forecast on its test part and, if the channel
+    already has an active model, show a larger gain than that one (gains are relative to the
+    naive forecast, so models trained on different intervals stay comparable)."""
     if mode == "always":
         return True
     if mode == "never":
         return False
     gain = metrics.get("mae_gain")
-    return gain is not None and gain > 0
+    if gain is None or gain <= 0:
+        return False
+    return active_gain is None or gain > active_gain
 
 
-def save_and_register(channel: str, model: TreeForecaster, metrics: dict, params: dict, activate: bool = True) -> dict:
-    """Save the model file and register (and activate) it in PostgreSQL; notify workers."""
+def save_and_register(channel: str, model: TreeForecaster, metrics: dict, params: dict, activate: bool | str = True) -> dict:
+    """Save the model file and register it in PostgreSQL; `activate` is a bool or an activation
+    mode ("auto" / "always" / "never", see should_activate). Notifies workers."""
     import redis
-    from sqlalchemy import update
+    from sqlalchemy import select, update
 
     from app.config import get_settings
     from app.db.models import ModelVersion
@@ -146,11 +181,17 @@ def save_and_register(channel: str, model: TreeForecaster, metrics: dict, params
 
     s = get_settings()
     model.meta["channel"] = channel
-    rel = Path(channel) / f"forecaster-{model.version.removeprefix('hgb-')}.joblib"
+    rel = Path(channel) / f"forecaster-{model.version}.joblib"
     save_model(model, Path(s.models_dir) / rel)
     clean_metrics = json.loads(json.dumps(metrics, default=float))
     sm = make_sync_sessionmaker(make_sync_engine(s))
     with sm() as sess:
+        if isinstance(activate, str):
+            current = sess.execute(
+                select(ModelVersion).where(ModelVersion.channel_id == channel, ModelVersion.active.is_(True))
+            ).scalars().first()
+            active_gain = (current.metrics or {}).get("mae_gain") if current is not None else None
+            activate = should_activate(activate, metrics, active_gain)
         if activate:
             sess.execute(
                 update(ModelVersion)
@@ -188,14 +229,27 @@ def load_archive(channel: str, t_from: int | None, t_to: int | None) -> tuple[np
     return ts[ok], x[ok]
 
 
-def run_training_job(channel: str, t_from: int | None, t_to: int | None, trees: int, depth: int, activate: str) -> dict:
+def run_training_job(
+    channel: str, t_from: int | None, t_to: int | None, trees: int, depth: int, activate: str, algorithm: str = "hgb"
+) -> dict:
     """Entry point executed in a worker process: archive -> model -> registry."""
     from app.config import get_settings
 
     s = get_settings()
     ts, x = load_archive(channel, t_from, t_to)
-    model, metrics, params = train_forecaster(ts, x, s.hampel_window, s.hampel_kappa, s.feature_window, trees, depth)
-    return save_and_register(channel, model, metrics, params, should_activate(activate, metrics))
+    model, metrics, params = train_forecaster(ts, x, s.hampel_window, s.hampel_kappa, s.feature_window, trees, depth, algorithm)
+    return save_and_register(channel, model, metrics, params, activate)
+
+
+def delete_model_file(models_dir: str, rel_path: str) -> bool:
+    path = Path(rel_path)
+    if not path.is_absolute():
+        path = Path(models_dir) / path
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
 
 
 @dataclass
@@ -204,6 +258,7 @@ class TrainingJob:
     channel: str
     t_from: int | None
     t_to: int | None
+    algorithm: str = "hgb"
     status: str = "queued"  # queued | running | done | error
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -224,10 +279,15 @@ class ModelTrainer:
             self._pool = ProcessPoolExecutor(max_workers=self.max_workers, mp_context=get_context("spawn"))
         return self._pool
 
-    def submit(self, channel: str, t_from: int | None, t_to: int | None, trees: int = 100, depth: int = 6, activate: str = "auto") -> TrainingJob:
-        job = TrainingJob(uuid.uuid4().hex[:12], channel, t_from, t_to)
+    def submit(
+        self, channel: str, t_from: int | None, t_to: int | None, trees: int = 100, depth: int = 6,
+        activate: str = "auto", algorithm: str = "hgb",
+    ) -> TrainingJob:
+        if algorithm not in ALGORITHMS:
+            raise TrainingError(f"unknown algorithm {algorithm!r}")
+        job = TrainingJob(uuid.uuid4().hex[:12], channel, t_from, t_to, algorithm)
         self.jobs[job.id] = job
-        fut = self._executor().submit(run_training_job, channel, t_from, t_to, trees, depth, activate)
+        fut = self._executor().submit(run_training_job, channel, t_from, t_to, trees, depth, activate, algorithm)
         job.status = "running"
 
         def done(f: Future) -> None:

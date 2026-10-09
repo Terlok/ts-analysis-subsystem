@@ -236,6 +236,7 @@ export interface TrainingJob {
   channel: string;
   t_from: Micros | null;
   t_to: Micros | null;
+  algorithm: string;
   status: "queued" | "running" | "done" | "error";
   created_at: number; // unix seconds
   finished_at: number | null;

@@ -256,8 +256,9 @@ class TrainRequest(BaseModel):
     t_to: int | None = None
     trees: int = Field(100, ge=10, le=1000)
     depth: int = Field(6, ge=2, le=16)
-    # auto: activate only if the model beats the naive forecast on the test part
+    # auto: activate only if the model beats the naive forecast (and the current active model)
     activate: Literal["auto", "always", "never"] = "auto"
+    algorithm: Literal["hgb", "rf", "ridge"] = "hgb"
 
 
 class TrainingJobOut(BaseModel):
@@ -265,6 +266,7 @@ class TrainingJobOut(BaseModel):
     channel: str
     t_from: int | None
     t_to: int | None
+    algorithm: str = "hgb"
     status: Literal["queued", "running", "done", "error"]
     created_at: float
     finished_at: float | None

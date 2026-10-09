@@ -483,8 +483,12 @@ select.input {
   color: var(--muted);
   font-weight: normal;
   position: sticky;
-  top: 33px;
+  top: 0;
   background: var(--panel);
+}
+/* below a sticky toolbar the header sticks under it */
+.toolbar + .table th {
+  top: 33px;
 }
 .table tr.clickable,
 .table td.clickable {
@@ -653,4 +657,49 @@ select.input {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 4px 24px;
   padding: 0 12px 8px;
+}
+
+.good {
+  color: var(--ok-ink);
+  font-weight: bold;
+}
+
+/* hover tooltip */
+.chart-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  z-index: 10;
+  pointer-events: none;
+  max-width: 440px;
+  background: rgba(238, 243, 246, 0.96);
+  border: 1px solid var(--btn-border);
+  border-radius: 3px;
+  box-shadow: 0 3px 10px rgba(31, 61, 82, 0.2);
+  padding: 5px 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.chart-tip .tip-time {
+  color: #1d4f78;
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+.chart-tip .tip-sep {
+  border-top: 1px solid var(--btn-border);
+  margin: 3px 0;
+}
+.chart-tip .tip-muted {
+  color: var(--muted);
+}
+.chart-tip .tip-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: 0;
 }

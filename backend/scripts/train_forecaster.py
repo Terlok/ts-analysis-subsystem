@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from app.config import get_settings
-from app.services.training import TrainingError, load_archive, save_and_register, should_activate, train_forecaster
+from app.services.training import ALGORITHMS, TrainingError, load_archive, save_and_register, train_forecaster
 from scripts.replay import parse_time
 from tsa_core.detectors import save_model
 
@@ -45,6 +45,7 @@ def main() -> int:
     p.add_argument("--hampel-window", type=int)
     p.add_argument("--hampel-kappa", type=float)
     p.add_argument("--feature-window", type=int)
+    p.add_argument("--algorithm", choices=list(ALGORITHMS), default="hgb")
     p.add_argument("--trees", type=int, default=100)
     p.add_argument("--depth", type=int, default=6)
     p.add_argument("--register", action="store_true", help="register in PostgreSQL")
@@ -71,15 +72,15 @@ def main() -> int:
     for ch in channels:
         try:
             ts, x = load_archive(ch, t_from, t_to) if a.questdb else load_file(a.file, ch, t_from, t_to)
-            model, metrics, params = train_forecaster(ts, x, hw, hk, fw, a.trees, a.depth)
+            model, metrics, params = train_forecaster(ts, x, hw, hk, fw, a.trees, a.depth, a.algorithm)
         except TrainingError as e:
             print(f"{ch}: {e}", file=sys.stderr)
             rc = 1
             continue
         if a.register:
-            info = save_and_register(ch, model, metrics, params, should_activate(a.activate, metrics))
+            info = save_and_register(ch, model, metrics, params, a.activate)
         else:
-            path = Path(s.models_dir) / ch / f"forecaster-{model.version.removeprefix('hgb-')}.joblib"
+            path = Path(s.models_dir) / ch / f"forecaster-{model.version}.joblib"
             save_model(model, path)
             info = {"path": str(path), "version": model.version, "metrics": metrics}
         print(json.dumps({"channel": ch, **info}, indent=2, ensure_ascii=False, default=float))

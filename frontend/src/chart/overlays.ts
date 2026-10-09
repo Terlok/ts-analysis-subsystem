@@ -67,8 +67,8 @@ export function drawOverlays(u: uPlot, o: OverlayOptions) {
     }
   }
 
-  // point flags: anomalies (filled red), substituted outliers (amber ring), analysis preview (violet)
-  const drawPoints = (pts: typeof o.overlays.flags, kind: "flags" | "preview") => {
+  // point flags: anomalies (filled red), substituted outliers (amber ring), analysis preview (model color)
+  const drawPoints = (pts: typeof o.overlays.flags, kind: "flags" | "preview", color: string = OVERLAY.preview) => {
     for (const f of pts) {
       const i = chIndex.get(f.channel);
       if (i === undefined || f.val === null) continue;
@@ -85,7 +85,7 @@ export function drawOverlays(u: uPlot, o: OverlayOptions) {
         ctx.lineTo(x, y + r);
         ctx.lineTo(x - r, y);
         ctx.closePath();
-        ctx.strokeStyle = OVERLAY.preview;
+        ctx.strokeStyle = color;
         ctx.lineWidth = 1.5 * dpr;
         ctx.stroke();
       } else if (f.anomaly) {
@@ -100,31 +100,33 @@ export function drawOverlays(u: uPlot, o: OverlayOptions) {
       }
     }
   };
-  // forecast of the analysed model: dashed line on the channel scale
-  const fc = o.overlays.forecast;
-  const fi = fc ? chIndex.get(fc.channel) : undefined;
-  if (fc && fi !== undefined && fc.t.length > 1) {
-    ctx.strokeStyle = OVERLAY.preview;
-    ctx.lineWidth = 1.25 * dpr;
-    ctx.setLineDash([5 * dpr, 3 * dpr]);
-    ctx.beginPath();
-    let started = false;
-    for (let k = 0; k < fc.t.length; k++) {
-      if (fc.t[k] < xMin || fc.t[k] > xMax) {
-        started = false;
-        continue;
+  // forecasts of the analysed models: dashed line + flagged points, in the model's color
+  for (const fc of o.overlays.previews) {
+    const fi = chIndex.get(fc.channel);
+    if (fi === undefined) continue;
+    if (fc.t.length > 1) {
+      ctx.strokeStyle = fc.color;
+      ctx.lineWidth = 1.25 * dpr;
+      ctx.setLineDash([5 * dpr, 3 * dpr]);
+      ctx.beginPath();
+      let started = false;
+      for (let k = 0; k < fc.t.length; k++) {
+        if (fc.t[k] < xMin || fc.t[k] > xMax) {
+          started = false;
+          continue;
+        }
+        const x = xPos(fc.t[k]);
+        const y = u.valToPos(fc.v[k], `y${fi}`, true);
+        if (started) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+        started = true;
       }
-      const x = xPos(fc.t[k]);
-      const y = u.valToPos(fc.v[k], `y${fi}`, true);
-      if (started) ctx.lineTo(x, y);
-      else ctx.moveTo(x, y);
-      started = true;
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-    ctx.stroke();
-    ctx.setLineDash([]);
+    drawPoints(fc.flags, "preview", fc.color);
   }
   if (o.showFlags) drawPoints(o.overlays.flags, "flags");
-  drawPoints(o.overlays.preview, "preview");
 
   // marks / robot mode changes: dashed vertical line with label
   ctx.font = `${10 * dpr}px monospace`;

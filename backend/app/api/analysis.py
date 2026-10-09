@@ -21,6 +21,7 @@ from app.schemas import (
     TrainRequest,
 )
 from app.services.models_store import load_active
+from app.services.training import ALGORITHMS, delete_model_file
 from app.state import AppState
 from tsa_core.downsample import lttb_indices
 from tsa_core.pipeline import ChannelParams, ChannelProcessor
@@ -65,8 +66,29 @@ async def train_model(body: TrainRequest, st: AppState = Depends(get_state)):
     The new version is registered and (by default) activated; analytics workers reload it."""
     if await st.registry.get(body.channel) is None:
         raise HTTPException(404, "channel not found")
-    job = st.trainer.submit(body.channel, body.t_from, body.t_to, body.trees, body.depth, body.activate)
+    job = st.trainer.submit(body.channel, body.t_from, body.t_to, body.trees, body.depth, body.activate, body.algorithm)
     return TrainingJobOut(**job.__dict__)
+
+
+@router.delete("/models/{model_id}", status_code=204)
+async def delete_model(model_id: int, st: AppState = Depends(get_state)):
+    """Delete a model version (registry record and file). If it was active, the channel
+    falls back to the naive forecast; analytics workers are notified."""
+    async with st.pg() as s:
+        mv = await s.get(ModelVersion, model_id)
+        if mv is None:
+            raise HTTPException(404, "model not found")
+        was_active, path = mv.active, mv.path
+        await s.delete(mv)
+        await s.commit()
+    await run_in_threadpool(delete_model_file, st.settings.models_dir, path)
+    if was_active:
+        await st.redis.incr(MODELS_VERSION_KEY)
+
+
+@router.get("/models/algorithms")
+async def model_algorithms():
+    return ALGORITHMS
 
 
 @router.get("/models/jobs", response_model=list[TrainingJobOut])
