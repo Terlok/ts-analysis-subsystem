@@ -2,10 +2,11 @@
 // with other parameters, without persisting anything, and overlay the result on the chart.
 import { useState } from "react";
 import { api, errorText } from "../api/client";
+import { clearPreview, maeText, runPreview } from "../lib/preview";
 import type { AnalysisPreviewResponse } from "../api/types";
 import { engine } from "../lib/engine";
 import { fmtDateTime, fmtDuration, fmtNum, usToS } from "../lib/format";
-import { useAppData, useEngine } from "../lib/hooks";
+import { useAppData, useEngine, usePolling } from "../lib/hooks";
 import type { Workspace } from "../lib/workspaces";
 
 export function AnalysisTab({ ws }: { ws: Workspace }) {
@@ -15,7 +16,9 @@ export function AnalysisTab({ ws }: { ws: Workspace }) {
   const ch = ws.channels.includes(channel) ? channel : (ws.channels[0] ?? "");
   const reg = channels.find((c) => c.id === ch);
   const [params, setParams] = useState({ hampel_window: "", hampel_kappa: "", feature_window: "", residual_k: "" });
-  const [useModel, setUseModel] = useState(true);
+  // "active" | "naive" | model version id
+  const [forecast, setForecast] = useState<string>("active");
+  const models = usePolling(() => api.models(ch), 0, [ch], !!ch);
   const [res, setRes] = useState<AnalysisPreviewResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -26,7 +29,7 @@ export function AnalysisTab({ ws }: { ws: Workspace }) {
     setBusy(true);
     setErr(null);
     try {
-      const r = await api.analysisPreview({
+      const r = await runPreview({
         channel: ch,
         t_from: Math.floor(a * 1e6),
         t_to: Math.ceil(b * 1e6),
@@ -34,10 +37,10 @@ export function AnalysisTab({ ws }: { ws: Workspace }) {
         hampel_kappa: num(params.hampel_kappa),
         feature_window: num(params.feature_window),
         residual_k: num(params.residual_k),
-        use_model: useModel,
+        use_model: forecast !== "naive",
+        model_id: forecast !== "naive" && forecast !== "active" ? Number(forecast) : null,
       });
       setRes(r);
-      engine.setPreview(r.flags);
     } catch (e) {
       setErr(errorText(e));
     } finally {
@@ -69,9 +72,18 @@ export function AnalysisTab({ ws }: { ws: Workspace }) {
           {field("hampel_kappa", "κ Гампеля", "Поріг заміни в σ (типово 3)", reg?.hampel_kappa)}
           {field("feature_window", "Вікно ознак", "Кількість відліків для віконних ознак", reg?.feature_window)}
           {field("residual_k", "k залишку", "Поріг ε = k·σr для залишку прогнозу", reg?.residual_k)}
-          <label className="toggle wide">
-            <input type="checkbox" checked={useModel} onChange={(e) => setUseModel(e.target.checked)} />
-            використати активну модель каналу
+          <label className="wide" title="Модель, яка прогнозує наступне значення (залишковий критерій)">
+            Прогноз
+            <select className="input" value={forecast} onChange={(e) => setForecast(e.target.value)}>
+              <option value="active">активна модель каналу (або наївний, якщо її немає)</option>
+              <option value="naive">наївний: xₜ₊₁ = xₜ</option>
+              {(models.data ?? []).map((m) => (
+                <option key={m.id} value={m.id}>
+                  #{m.id} {m.version}
+                  {m.active ? " (активна)" : ""}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="row wide">
             <button className="btn primary" onClick={run} disabled={busy}>
@@ -81,14 +93,15 @@ export function AnalysisTab({ ws }: { ws: Workspace }) {
               className="btn"
               onClick={() => {
                 setRes(null);
-                engine.setPreview([]);
+                clearPreview();
               }}
             >
               Очистити
             </button>
           </div>
           <p className="muted small wide">
-            {fmtDateTime(snap.range[0])} — {fmtDateTime(snap.range[1])}. Результат показується на графіку фіолетовими ромбами і нікуди не зберігається.
+            {fmtDateTime(snap.range[0])} — {fmtDateTime(snap.range[1])}. Прогноз показується на графіку фіолетовим пунктиром, позначки —
+            фіолетовими ромбами; нічого не зберігається.
           </p>
           {err && <span className="err wide">{err}</span>}
         </div>
@@ -103,6 +116,7 @@ export function AnalysisTab({ ws }: { ws: Workspace }) {
               <span>аномальних: {res.anomalies}</span>
               <span>модель: {res.model}</span>
               <span className="muted">{res.elapsed_ms.toFixed(0)} мс</span>
+              {res.mae_model != null && <span>{maeText(res.mae_model, res.mae_naive)}</span>}
             </div>
             <table className="table">
               <thead>

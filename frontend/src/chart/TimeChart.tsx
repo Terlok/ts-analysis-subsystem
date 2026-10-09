@@ -32,6 +32,15 @@ interface Props {
   onWidth?: (px: number) => void;
 }
 
+/** Data in the order of this chart's series. A channel that the engine has not loaded yet
+ * (e.g. just added: the chart re-renders before the engine is reconfigured) gets an empty
+ * column, so uPlot never sees fewer data columns than series. */
+function aligned(d: ChartData, series: ChartSeries[]): uPlot.AlignedData {
+  const idx = new Map(d.channels.map((c, i) => [c, i]));
+  const empty = () => new Array<number | null>(d.x.length).fill(null);
+  return [d.x, ...series.map((s) => (idx.has(s.channel) ? d.ys[idx.get(s.channel)!] : empty()))] as uPlot.AlignedData;
+}
+
 function yRange(limits: [number | null, number | null] | undefined) {
   return (_u: uPlot, min: number, max: number): uPlot.Range.MinMax => {
     let lo = limits?.[0] ?? null;
@@ -148,8 +157,7 @@ export function TimeChart(p: Props) {
         ],
       },
     };
-    const d = props.current.getData();
-    const u = new uPlot(opts, [d.x, ...d.ys] as uPlot.AlignedData, el);
+    const u = new uPlot(opts, aligned(props.current.getData(), props.current.series), el);
     plot.current = u;
 
     const onWheel = (ev: WheelEvent) => {
@@ -194,9 +202,8 @@ export function TimeChart(p: Props) {
   useEffect(() => {
     const u = plot.current;
     if (!u) return;
-    const d = p.getData();
     u.batch(() => {
-      u.setData([d.x, ...d.ys] as uPlot.AlignedData, false);
+      u.setData(aligned(p.getData(), p.series), false);
       u.setScale("x", { min: p.range[0], max: p.range[1] });
     });
   }, [p.version, p.range[0], p.range[1]]); // eslint-disable-line react-hooks/exhaustive-deps

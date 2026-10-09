@@ -3,13 +3,112 @@ import { useEffect, useState } from "react";
 import { api, errorText } from "../api/client";
 import type { ModelVersion } from "../api/types";
 import { engine } from "../lib/engine";
-import { fmtDateTime, usToS } from "../lib/format";
+import { fmtDateTime, fmtDuration, usToS } from "../lib/format";
 import { useAppData, useEngine, usePolling } from "../lib/hooks";
-import type { Workspace } from "../lib/workspaces";
+import { maeText, runPreview } from "../lib/preview";
+import { workspaces, type Workspace } from "../lib/workspaces";
 
 type Scope = "all" | "view" | "before";
 
 const fmtMetric = (v: unknown, digits = 3) => (typeof v === "number" ? v.toPrecision(digits) : "—");
+
+/** Start of the test part (last 20% of the training data, after the gap) in seconds. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function testStart(mt: Record<string, any>): number | null {
+  const sp = mt.split;
+  if (!mt.t_from || !mt.t_to || !sp) return null;
+  const total = sp.train + sp.val + sp.test + 2 * sp.gap;
+  const frac = (sp.train + sp.val + 2 * sp.gap) / total;
+  return usToS(mt.t_from + (mt.t_to - mt.t_from) * frac);
+}
+
+function ModelDetails({ m, ws, onClose, onActivate }: { m: ModelVersion; ws: Workspace; onClose: () => void; onActivate: () => void }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mt = (m.metrics ?? {}) as Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pr = (m.params ?? {}) as Record<string, any>;
+  const [check, setCheck] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const t0 = testStart(mt);
+
+  const show = async () => {
+    if (t0 === null) return;
+    const a = t0;
+    const b = Math.min(t0 + 3600, usToS(mt.t_to));
+    if (!ws.channels.includes(m.channel_id)) workspaces.update(ws.id, { channels: [...ws.channels, m.channel_id] });
+    engine.zoomTo(a, b);
+    setBusy(true);
+    try {
+      const r = await runPreview({ channel: m.channel_id, t_from: Math.floor(a * 1e6), t_to: Math.ceil(b * 1e6), use_model: true, model_id: m.id });
+      setCheck(`${fmtDateTime(a)} — ${fmtDateTime(b)}: ${maeText(r.mae_model, r.mae_naive)}; аномальних точок ${r.anomalies}, замінено ${r.substituted}`);
+    } catch (e) {
+      setCheck(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const row = (k: string, v: React.ReactNode, hint?: string) => (
+    <div className="kvrow" title={hint}>
+      <dt>{k}</dt>
+      <dd>{v}</dd>
+    </div>
+  );
+  return (
+    <div className="model-card">
+      <div className="toolbar">
+        <b>
+          Модель #{m.id} · {m.channel_id} · {m.version}
+        </b>
+        {m.active ? (
+          <span className="pill ok">активна</span>
+        ) : (
+          <button className="btn" onClick={onActivate}>
+            Активувати
+          </button>
+        )}
+        <button className="btn primary" onClick={show} disabled={busy || t0 === null} title="Перша година тестової частини: дані, яких модель не бачила під час навчання">
+          {busy ? "Обчислення…" : "Показати на графіку (тестова частина)"}
+        </button>
+        <button className="btn" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      {check && <p className="pad small">{check}</p>}
+      <div className="model-grid">
+        <dl className="kv">
+          {row("Дані", mt.t_from ? `${fmtDateTime(usToS(mt.t_from))} — ${fmtDateTime(usToS(mt.t_to))}` : "—")}
+          {row("Тривалість", mt.t_from ? fmtDuration(usToS(mt.t_to - mt.t_from)) : "—")}
+          {row("Точок", mt.n_points?.toLocaleString("uk-UA") ?? "—")}
+          {row(
+            "Розбиття",
+            mt.split ? `${mt.split.train.toLocaleString("uk-UA")} / ${mt.split.val.toLocaleString("uk-UA")} / ${mt.split.test.toLocaleString("uk-UA")}, проміжок ${mt.split.gap}` : "—",
+            "навчальна / валідаційна / тестова частини у часі, з проміжками між ними",
+          )}
+          {row("Тест починається", t0 ? fmtDateTime(t0) : "—")}
+          {row("Замінено Гампелем", mt.substituted_share != null ? `${(mt.substituted_share * 100).toFixed(2)}%` : "—")}
+        </dl>
+        <dl className="kv">
+          {row("MAE на тесті", fmtMetric(mt.mae_test), "середня абсолютна похибка прогнозу наступного значення")}
+          {row("MAE наївного", fmtMetric(mt.mae_test_naive), "xₜ₊₁ = xₜ")}
+          {row("Виграш", gain(m.metrics))}
+          {row("σr", fmtMetric(mt.sigma_r), "1.4826·MAD залишків на валідаційній частині")}
+          {row("Поріг ε при k=3 / k=5", mt.sigma_r != null ? `${fmtMetric(3 * mt.sigma_r)} / ${fmtMetric(5 * mt.sigma_r)}` : "—")}
+          {row("Навчання", mt.fit_s != null ? `${mt.fit_s} с` : "—")}
+          {row("Інференс", mt.batch_inference_us_per_point != null ? `${mt.batch_inference_us_per_point} мкс/точку` : "—", "пакетний виклик")}
+        </dl>
+        <dl className="kv">
+          {row("Дерев / глибина", `${pr.trees ?? "—"} / ${pr.depth ?? "—"}`)}
+          {row("w, κ Гампеля", `${pr.hampel_window ?? "—"}, ${pr.hampel_kappa ?? "—"}`)}
+          {row("Вікно ознак", pr.feature_window ?? "—")}
+          {row("Ознаки", Array.isArray(pr.features) ? pr.features.join(", ") : "—")}
+          {row("Ціль", pr.target === "increment" ? "приріст xₜ₊₁ − xₜ" : (pr.target ?? "—"))}
+          {row("Файл", <span className="small">{m.path}</span>)}
+        </dl>
+      </div>
+    </div>
+  );
+}
 
 function gain(m: Record<string, unknown> | null): string {
   const g = m?.mae_gain;
@@ -26,6 +125,7 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
   const [depth, setDepth] = useState(6);
   const [activate, setActivate] = useState<"auto" | "always" | "never">("auto");
   const [err, setErr] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
 
   const models = usePolling(() => api.models(), 0);
   const jobs = usePolling(() => api.trainingJobs(), 2000);
@@ -130,6 +230,24 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
         )}
       </div>
       <div className="pane grow">
+        {(() => {
+          const sel = (models.data ?? []).find((x) => x.id === selected);
+          return sel ? (
+            <ModelDetails
+              m={sel}
+              ws={ws}
+              onClose={() => setSelected(null)}
+              onActivate={async () => {
+                try {
+                  await api.activateModel(sel.id);
+                  models.reload();
+                } catch (e) {
+                  setErr(errorText(e));
+                }
+              }}
+            />
+          ) : null;
+        })()}
         <div className="toolbar">
           <label className="toggle">
             <input type="checkbox" checked={onlyChart} onChange={(e) => setOnlyChart(e.target.checked)} />
@@ -156,7 +274,7 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
             {list.map((m) => {
               const mt = (m.metrics ?? {}) as Record<string, number>;
               return (
-                <tr key={m.id}>
+                <tr key={m.id} className={`clickable ${selected === m.id ? "sel" : ""}`} onClick={() => setSelected(m.id)} title="Відкрити картку моделі">
                   <td>{m.id}</td>
                   <td>{m.channel_id}</td>
                   <td>{m.version}</td>
@@ -175,7 +293,8 @@ export function ModelsTab({ ws }: { ws: Workspace }) {
                     {!m.active && (
                       <button
                         className="btn"
-                        onClick={async () => {
+                        onClick={async (ev) => {
+                          ev.stopPropagation();
                           try {
                             await api.activateModel(m.id);
                             models.reload();

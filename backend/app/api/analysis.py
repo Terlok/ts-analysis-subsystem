@@ -22,12 +22,14 @@ from app.schemas import (
 )
 from app.services.models_store import load_active
 from app.state import AppState
+from tsa_core.downsample import lttb_indices
 from tsa_core.pipeline import ChannelParams, ChannelProcessor
 
 router = APIRouter(prefix="/api", tags=["analysis"])
 
 MAX_PREVIEW_POINTS = 500_000
 MAX_PREVIEW_FLAGS = 5_000
+MAX_FORECAST_POINTS = 3_000
 
 
 @router.get("/models", response_model=list[ModelVersionOut])
@@ -99,11 +101,17 @@ async def analysis_preview(body: AnalysisPreviewRequest, st: AppState = Depends(
     forecaster = classifier = None
     if body.use_model:
         async with st.pg() as s:
-            rows = (
-                await s.execute(
-                    select(ModelVersion).where(ModelVersion.channel_id == body.channel, ModelVersion.active.is_(True))
-                )
-            ).scalars().all()
+            if body.model_id is not None:
+                mv = await s.get(ModelVersion, body.model_id)
+                if mv is None or mv.channel_id != body.channel:
+                    raise HTTPException(422, "model version not found for this channel")
+                rows = [mv]
+            else:
+                rows = (
+                    await s.execute(
+                        select(ModelVersion).where(ModelVersion.channel_id == body.channel, ModelVersion.active.is_(True))
+                    )
+                ).scalars().all()
         models = await run_in_threadpool(load_active, list(rows), st.settings.models_dir)
         forecaster, classifier = models.get(body.channel, (None, None))
 
@@ -117,6 +125,18 @@ async def analysis_preview(body: AnalysisPreviewRequest, st: AppState = Depends(
 
     res, episodes, model, elapsed = await run_in_threadpool(run)
     idx = np.flatnonzero(res.flagged)[:MAX_PREVIEW_FLAGS]
+
+    # accuracy on this interval, computed like the training metrics: forecast made at t-1 vs.
+    # the Hampel-filtered value at t, and the naive forecast (filtered x_{t-1})
+    has = ~np.isnan(res.pred) & ~np.isnan(res.filtered)
+    prev = np.r_[np.nan, res.filtered[:-1]]
+    both = has & ~np.isnan(prev)
+    mae_model = float(np.mean(np.abs(res.filtered[both] - res.pred[both]))) if both.any() else None
+    mae_naive = float(np.mean(np.abs(res.filtered[both] - prev[both]))) if both.any() else None
+    ft, fv = res.ts[has], res.pred[has]
+    if len(ft) > MAX_FORECAST_POINTS:
+        sel = lttb_indices(ft, fv, MAX_FORECAST_POINTS)
+        ft, fv = ft[sel], fv[sel]
 
     def f(a, i):
         v = float(a[i])
@@ -139,4 +159,8 @@ async def analysis_preview(body: AnalysisPreviewRequest, st: AppState = Depends(
         episodes=[e.__dict__ for e in episodes],
         flags=flags,
         elapsed_ms=round(elapsed, 2),
+        forecast_t=[int(t) for t in ft],
+        forecast_v=[float(v) for v in fv],
+        mae_model=mae_model,
+        mae_naive=mae_naive,
     )

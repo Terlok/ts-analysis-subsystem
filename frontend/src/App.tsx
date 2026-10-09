@@ -5,6 +5,7 @@ import { Navigator } from "./chart/Navigator";
 import { TimeChart, type ChartSeries } from "./chart/TimeChart";
 import { BottomPanel, type PanelSize } from "./components/BottomPanel";
 import { ChannelBar, type Layers } from "./components/ChannelBar";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { TopBar } from "./components/TopBar";
 import { seriesColor } from "./lib/colors";
 import { engine } from "./lib/engine";
@@ -164,7 +165,9 @@ export function App() {
             storage.set("tsa.layers", JSON.stringify(l));
           }}
         />
-        <ChartArea ws={ws} layers={layers} />
+        <ErrorBoundary resetKey={`${ws.id}|${ws.channels.join(",")}|${ws.layout}`}>
+          <ChartArea ws={ws} layers={layers} />
+        </ErrorBoundary>
         <BottomPanel
           ws={ws}
           size={panel}

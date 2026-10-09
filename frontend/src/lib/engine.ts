@@ -61,6 +61,8 @@ export interface Overlays {
   alarms: Alarm[];
   modes: ModeChange[];
   preview: FlagPoint[];
+  /** one-step-ahead forecast of the analysis preview (seconds / values) */
+  forecast: { channel: string; t: number[]; v: number[] } | null;
 }
 
 const MAX_LIVE_FLAGS = 5000;
@@ -126,7 +128,7 @@ export class DataEngine {
   private liveFin = new Map<string, { t: number[]; v: number[] }>();
   private liveTail = new Map<string, Arr>();
   private overview = new Map<string, Arr>();
-  overlays: Overlays = { events: [], flags: [], alarms: [], modes: [], preview: [] };
+  overlays: Overlays = { events: [], flags: [], alarms: [], modes: [], preview: [], forecast: null };
 
   private reqSeq = 0;
   private histReq = 0;
@@ -202,7 +204,7 @@ export class DataEngine {
       this.liveFin.clear();
       this.liveTail.clear();
       this.overview.clear();
-      this.overlays = { ...this.overlays, events: [], flags: [], alarms: [], preview: [] };
+      this.overlays = { ...this.overlays, events: [], flags: [], alarms: [], preview: [], forecast: null };
       this.latestDataT = 0;
       this.emit({ meta: {}, last: {} });
       void this.loadOverview();
@@ -541,8 +543,8 @@ export class DataEngine {
     this.bumpOverlay();
   }
 
-  setPreview(flags: FlagPoint[]) {
-    this.overlays = { ...this.overlays, preview: flags };
+  setPreview(flags: FlagPoint[], forecast: Overlays["forecast"] = null) {
+    this.overlays = { ...this.overlays, preview: flags, forecast };
     this.bumpOverlay();
   }
 

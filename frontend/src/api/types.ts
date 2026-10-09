@@ -180,6 +180,7 @@ export interface AnalysisPreviewRequest {
   feature_window?: number | null;
   residual_k?: number | null;
   use_model: boolean;
+  model_id?: number | null;
 }
 
 export interface AnalysisPreviewResponse {
@@ -191,6 +192,10 @@ export interface AnalysisPreviewResponse {
   episodes: Array<{ kind: string; ts_start: Micros; ts_end: Micros; n_points: number; peak_value: number; peak_score: number }>;
   flags: FlagPoint[];
   elapsed_ms: number;
+  forecast_t: Micros[];
+  forecast_v: number[];
+  mae_model: number | null;
+  mae_naive: number | null;
 }
 
 export interface Health {

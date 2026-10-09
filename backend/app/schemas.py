@@ -284,6 +284,7 @@ class AnalysisPreviewRequest(BaseModel):
     feature_window: int | None = Field(None, ge=2)
     residual_k: float | None = Field(None, gt=0)
     use_model: bool = True
+    model_id: int | None = None  # a specific model version (also inactive); default: the active one
 
 
 class AnalysisPreviewResponse(BaseModel):
@@ -295,6 +296,11 @@ class AnalysisPreviewResponse(BaseModel):
     episodes: list[dict]
     flags: list[FlagPoint]
     elapsed_ms: float
+    # one-step-ahead forecast over the interval (downsampled for drawing) and its accuracy
+    forecast_t: list[int] = []
+    forecast_v: list[float] = []
+    mae_model: float | None = None
+    mae_naive: float | None = None
 
 
 # --- live subscription (WebSocket /ws/stream) ----------------------------------

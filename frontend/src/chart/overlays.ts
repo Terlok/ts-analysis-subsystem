@@ -100,6 +100,29 @@ export function drawOverlays(u: uPlot, o: OverlayOptions) {
       }
     }
   };
+  // forecast of the analysed model: dashed line on the channel scale
+  const fc = o.overlays.forecast;
+  const fi = fc ? chIndex.get(fc.channel) : undefined;
+  if (fc && fi !== undefined && fc.t.length > 1) {
+    ctx.strokeStyle = OVERLAY.preview;
+    ctx.lineWidth = 1.25 * dpr;
+    ctx.setLineDash([5 * dpr, 3 * dpr]);
+    ctx.beginPath();
+    let started = false;
+    for (let k = 0; k < fc.t.length; k++) {
+      if (fc.t[k] < xMin || fc.t[k] > xMax) {
+        started = false;
+        continue;
+      }
+      const x = xPos(fc.t[k]);
+      const y = u.valToPos(fc.v[k], `y${fi}`, true);
+      if (started) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+      started = true;
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   if (o.showFlags) drawPoints(o.overlays.flags, "flags");
   drawPoints(o.overlays.preview, "preview");
 

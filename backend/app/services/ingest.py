@@ -34,6 +34,7 @@ from tsa_core.quality import quality_from_source
 TS_MIN = 946_684_800_000_000
 TS_MAX = 4_102_444_800_000_000
 LATENCY_SAMPLES = 10_000
+ACQ_MAX_US = 3600 * 1_000_000  # older data is history import, not live delivery
 
 
 def now_us() -> int:
@@ -136,8 +137,10 @@ class IngestService:
                 orjson.dumps({"ts": t_last, "val": None if last_v != last_v else last_v, "q": q[-1]}),
             )
             pipe.eval(WM_LUA, 1, WM_KEY, cid, t_last)
-        # L_acq sample: delivery delay of the newest point (meaningful with synchronized clocks)
+        # L_acq sample: delivery delay of the newest point (meaningful with synchronized clocks).
+        # Packets of archived history (much older than now) are not live data and are skipped.
         newest = max(int(ts[-1]) for _, ts, *_ in chans)
-        pipe.lpush(latency_key("acq"), t_ing - newest)
-        pipe.ltrim(latency_key("acq"), 0, LATENCY_SAMPLES - 1)
+        if t_ing - newest < ACQ_MAX_US:
+            pipe.lpush(latency_key("acq"), t_ing - newest)
+            pipe.ltrim(latency_key("acq"), 0, LATENCY_SAMPLES - 1)
         await pipe.execute()

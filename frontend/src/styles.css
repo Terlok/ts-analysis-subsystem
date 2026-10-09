@@ -574,9 +574,18 @@ select.input {
 
 .sys {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 8px 18px;
   padding: 8px 12px;
+}
+.sys section {
+  min-width: 0; /* grid items may shrink below their content: tables scroll instead of overlapping */
+  overflow-x: auto;
+}
+.sys .table td,
+.sys .table th {
+  white-space: normal;
+  padding: 3px 6px;
 }
 .sys h4 {
   margin: 4px 0 6px;
@@ -633,4 +642,15 @@ select.input {
   background: rgba(238, 243, 246, 0.85);
   padding: 1px 6px;
   border-radius: 3px;
+}
+
+.model-card {
+  border-bottom: 1px solid var(--bar-border);
+  background: rgba(255, 255, 255, 0.18);
+}
+.model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 4px 24px;
+  padding: 0 12px 8px;
 }
